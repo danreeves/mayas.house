@@ -14,6 +14,9 @@ import { CharacterModal } from '../src/components/CharacterModal';
 import {
   type InputState,
   type LocalPhysicsState,
+  findFootholdBelow,
+  getSpawnPoint,
+  getWalkableFootholds,
   stepPhysics,
 } from '../src/engine/physics';
 import {
@@ -27,6 +30,7 @@ import {
 } from '../src/engine/sprites';
 import '../src/styles/maple.css';
 import type {
+  CharacterAction,
   CharacterEmotion,
   ChatMessage,
   MapleMapData,
@@ -137,6 +141,53 @@ export default function MayasHousePage() {
   let cameraX = 0;
   let cameraY = 120;
 
+  // Remote positions only arrive every ~55ms. Packets are buffered with their
+  // arrival time and the drawn position is interpolated a short, fixed delay
+  // behind the newest one: that plays back at the real walking speed instead of
+  // easing towards each packet, which trails and reads as floaty.
+  interface RemoteSample {
+    t: number;
+    x: number;
+    y: number;
+    action: CharacterAction;
+    flipX: boolean;
+  }
+  const remoteSamples = new Map<string, RemoteSample[]>();
+  const REMOTE_RENDER_DELAY_MS = 90;
+  const REMOTE_EXTRAPOLATE_MS = 70;
+  const REMOTE_SAMPLE_LIMIT = 24;
+
+  // Channel changes fade out, respawn at the map's spawn portal, then fade back in
+  // while the new channel's socket connects.
+  const CHANNEL_FADE_MS = 260;
+  let fadeAlpha = 0;
+  let fadeToBlack = false;
+  let channelSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const cameraTargetFor = (x: number, y: number) => ({
+    x: Math.max(-180, Math.min(260, x)),
+    y: Math.max(20, Math.min(165, y - 75)),
+  });
+
+  const trackRemoteSample = (
+    id: string,
+    x: number,
+    y: number,
+    action: CharacterAction,
+    flipX: boolean,
+    at = performance.now(),
+  ) => {
+    let samples = remoteSamples.get(id);
+    if (!samples) {
+      samples = [];
+      remoteSamples.set(id, samples);
+    }
+    samples.push({ t: at, x, y, action, flipX });
+    if (samples.length > REMOTE_SAMPLE_LIMIT) {
+      samples.splice(0, samples.length - REMOTE_SAMPLE_LIMIT);
+    }
+  };
+
   const syncRemoteList = () => {
     setRemotePlayers(Array.from(remotePlayerMap.values()));
   };
@@ -186,12 +237,38 @@ export default function MayasHousePage() {
     }
   };
 
+  const respawnAtSpawn = () => {
+    const spawn = getSpawnPoint(mapData());
+    physicsState.x = spawn.x;
+    physicsState.y = spawn.y;
+    physicsState.vx = 0;
+    physicsState.vy = 0;
+    physicsState.action = 'stand1';
+    physicsState.flipX = false;
+    physicsState.sitting = false;
+    physicsState.onLadder = null;
+    physicsState.ignoreFootholdId = null;
+    physicsState.ignoreFootholdUntil = 0;
+    physicsState.ladderCooldownUntil = 0;
+    setIsSitting(false);
+
+    // Arrive airborne, exactly like the real spawn portal drop-in: the physics
+    // step then applies gravity and lands the character on the floor below.
+    physicsState.footholdId = null;
+
+    // Snap the camera behind the black-out so the fade-in already shows the spawn.
+    const target = cameraTargetFor(physicsState.x, physicsState.y);
+    cameraX = target.x;
+    cameraY = target.y;
+  };
+
   const connectToChannel = (targetChannel: string) => {
     if (activeSocket) {
       activeSocket.close();
       activeSocket = null;
     }
     remotePlayerMap.clear();
+    remoteSamples.clear();
     syncRemoteList();
     setConnected(false);
 
@@ -224,9 +301,11 @@ export default function MayasHousePage() {
       if (event.type === 'channel.init') {
         setSelfId(event.selfId);
         remotePlayerMap.clear();
+        remoteSamples.clear();
         for (const p of event.players) {
           if (p.id !== event.selfId) {
             remotePlayerMap.set(p.id, p);
+            trackRemoteSample(p.id, p.x, p.y, p.action, p.flipX);
             preloadCharacterCommonFrames(p.character);
           }
         }
@@ -241,6 +320,13 @@ export default function MayasHousePage() {
       if (event.type === 'player.joined') {
         if (event.player.id === selfId()) return;
         remotePlayerMap.set(event.player.id, event.player);
+        trackRemoteSample(
+          event.player.id,
+          event.player.x,
+          event.player.y,
+          event.player.action,
+          event.player.flipX,
+        );
         preloadCharacterCommonFrames(event.player.character);
         syncRemoteList();
         return;
@@ -249,14 +335,17 @@ export default function MayasHousePage() {
       if (event.type === 'player.moved') {
         const existing = remotePlayerMap.get(event.id);
         if (existing) {
-          existing.x = event.x;
-          existing.y = event.y;
           existing.vx = event.vx;
           existing.vy = event.vy;
-          existing.action = event.action;
-          existing.flipX = event.flipX;
           existing.footholdId = event.footholdId;
           existing.updatedAt = event.updatedAt;
+          trackRemoteSample(
+            event.id,
+            event.x,
+            event.y,
+            event.action,
+            event.flipX,
+          );
           syncRemoteList();
         }
         return;
@@ -278,7 +367,19 @@ export default function MayasHousePage() {
 
       if (event.type === 'player.updated') {
         if (event.player.id === selfId()) return;
-        remotePlayerMap.set(event.player.id, event.player);
+        // Keep the currently drawn position so a look change doesn't teleport them.
+        const existing = remotePlayerMap.get(event.player.id);
+        const next = existing
+          ? { ...event.player, x: existing.x, y: existing.y }
+          : event.player;
+        remotePlayerMap.set(event.player.id, next);
+        trackRemoteSample(
+          event.player.id,
+          event.player.x,
+          event.player.y,
+          event.player.action,
+          event.player.flipX,
+        );
         preloadCharacterCommonFrames(event.player.character);
         syncRemoteList();
         return;
@@ -286,6 +387,7 @@ export default function MayasHousePage() {
 
       if (event.type === 'player.left') {
         remotePlayerMap.delete(event.id);
+        remoteSamples.delete(event.id);
         chatBubbles.delete(event.id);
         syncRemoteList();
         return;
@@ -464,18 +566,69 @@ export default function MayasHousePage() {
         }
       }
 
-      // Smoothly interpolate remote players slightly along velocity
-      for (const remote of remotePlayerMap.values()) {
-        if (remote.action === 'walk1' || remote.action === 'jump') {
-          remote.x += remote.vx * dt * 0.35;
+      // Play remote movement back slightly behind the newest packet so it runs at
+      // the right speed and stays smooth despite the low update rate.
+      const remoteRenderTime = nowPerf - REMOTE_RENDER_DELAY_MS;
+      for (const [id, remote] of remotePlayerMap) {
+        const samples = remoteSamples.get(id);
+        if (!samples || samples.length === 0) continue;
+
+        const newest = samples[samples.length - 1];
+        if (samples.length === 1) {
+          remote.x = newest.x;
+          remote.y = newest.y;
+          remote.action = newest.action;
+          remote.flipX = newest.flipX;
+          continue;
         }
+
+        // Only predict past the newest packet while they are actually moving, and
+        // never by much: a standing player must not keep sliding forward.
+        const moving = newest.action === 'walk1' || newest.action === 'jump';
+        const t = Math.min(
+          remoteRenderTime,
+          newest.t + (moving ? REMOTE_EXTRAPOLATE_MS : 0),
+        );
+
+        let i = 0;
+        while (i < samples.length - 2 && samples[i + 1].t <= t) i += 1;
+        const a = samples[i];
+        const b = samples[i + 1];
+        const span = b.t - a.t;
+        const alpha = span > 0 ? (t - a.t) / span : 1;
+
+        if (Math.abs(b.x - a.x) + Math.abs(b.y - a.y) > 200) {
+          // A jump this large is a teleport/respawn, not movement: don't slide.
+          remote.x = b.x;
+          remote.y = b.y;
+        } else {
+          remote.x = a.x + (b.x - a.x) * alpha;
+          remote.y = a.y + (b.y - a.y) * alpha;
+        }
+
+        // Pose comes from the start of the segment being interpolated, but once the
+        // stream goes quiet (player standing still) time clamps onto the newest
+        // sample, so that one wins: otherwise remotes stay stuck in their last
+        // moving pose (mid-jump, prone, ...).
+        const pose = t >= b.t ? b : a;
+        remote.action = pose.action;
+        remote.flipX = pose.flipX;
       }
 
       // Smooth camera tracking clamped to Maya's House bounds
-      const targetCamX = Math.max(-180, Math.min(260, physicsState.x));
-      const targetCamY = Math.max(20, Math.min(165, physicsState.y - 75));
-      cameraX += (targetCamX - cameraX) * Math.min(1, dt * 7);
-      cameraY += (targetCamY - cameraY) * Math.min(1, dt * 7);
+      const camTarget = cameraTargetFor(physicsState.x, physicsState.y);
+      cameraX += (camTarget.x - cameraX) * Math.min(1, dt * 7);
+      cameraY += (camTarget.y - cameraY) * Math.min(1, dt * 7);
+
+      // Channel-change fade easing
+      const fadeTarget = fadeToBlack ? 1 : 0;
+      if (fadeAlpha !== fadeTarget) {
+        const fadeStep = dt / (CHANNEL_FADE_MS / 1000);
+        fadeAlpha =
+          fadeTarget > fadeAlpha
+            ? Math.min(fadeTarget, fadeAlpha + fadeStep)
+            : Math.max(fadeTarget, fadeAlpha - fadeStep);
+      }
 
       // Broadcast movement to channel if position or action changed
       const movedDist =
@@ -554,6 +707,12 @@ export default function MayasHousePage() {
             },
             nowWall,
           );
+
+          // Channel-change black-out, drawn over everything else
+          if (fadeAlpha > 0.001) {
+            ctx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha.toFixed(3)})`;
+            ctx.fillRect(0, 0, canvasRef.width, canvasRef.height);
+          }
         }
       }
 
@@ -565,6 +724,10 @@ export default function MayasHousePage() {
     onCleanup(() => {
       cancelAnimationFrame(animId);
       clearInterval(mayaInterval);
+      if (channelSwitchTimer) {
+        clearTimeout(channelSwitchTimer);
+        channelSwitchTimer = null;
+      }
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
@@ -587,14 +750,23 @@ export default function MayasHousePage() {
   });
 
   const handleChannelChange = (nextChannel: string) => {
-    if (nextChannel === channel()) return;
+    if (nextChannel === channel() || channelSwitchTimer) return;
     setChannel(nextChannel);
     try {
       localStorage.setItem(STORAGE_CHANNEL_KEY, nextChannel);
     } catch {
       // Ignore storage error
     }
-    connectToChannel(nextChannel);
+
+    // Black the screen out, respawn at the map's spawn portal, then join the new
+    // channel and fade back in while the socket connects.
+    fadeToBlack = true;
+    channelSwitchTimer = setTimeout(() => {
+      channelSwitchTimer = null;
+      respawnAtSpawn();
+      connectToChannel(nextChannel);
+      fadeToBlack = false;
+    }, CHANNEL_FADE_MS);
   };
 
   const handleSendChat = (e: Event) => {

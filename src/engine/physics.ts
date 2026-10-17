@@ -45,6 +45,30 @@ export function getWalkableFootholds(mapData: MapleMapData): MapleFoothold[] {
   return Object.values(mapData.footholds).filter((fh) => fh.x1 < fh.x2);
 }
 
+export interface SpawnPoint {
+  x: number;
+  y: number;
+}
+
+// Maya's House spawn portal (GMS/93 map 100000001) is x 364, y 204, but keep a
+// sane fallback for the moment before the map metadata has loaded.
+const FALLBACK_SPAWN: SpawnPoint = { x: 364, y: 204 };
+
+/**
+ * The map's `type === 0` portal is the invisible spawn point the client drops you
+ * in through, which is where MapleStory respawns you after a channel change.
+ */
+export function getSpawnPoint(mapData: MapleMapData | null): SpawnPoint {
+  const spawn = (mapData?.portals ?? []).find(
+    (portal) =>
+      portal &&
+      (portal.type === 0 || portal.portalName === 'sp') &&
+      Number.isFinite(portal.x) &&
+      Number.isFinite(portal.y),
+  );
+  return spawn ? { x: spawn.x, y: spawn.y } : { ...FALLBACK_SPAWN };
+}
+
 export function getFootholdYAtX(fh: MapleFoothold, x: number): number {
   if (fh.x2 === fh.x1 || fh.y1 === fh.y2) return fh.y1;
   const t = (x - fh.x1) / (fh.x2 - fh.x1);
