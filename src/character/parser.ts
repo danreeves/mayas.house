@@ -228,11 +228,21 @@ export function getCharacterItemEntries(
   });
 }
 
+/**
+ * `FeetCenter` asks maplestory.io to pad the sprite so the character's feet land
+ * exactly on the canvas centre, instead of cropping the canvas tight to the drawn
+ * pixels. Without it, any layer that reaches past the feet (capes, wings, sun/aura
+ * effects) inflates the bounds, and anchoring on the image box makes the character
+ * float up and to the left of its real position.
+ */
+export type CharacterRenderMode = 'Full' | 'FeetCenter';
+
 export function buildCharacterSpriteUrl(
   character: MapleSimCharacter,
   action: CharacterAction = 'stand1',
   frame: number | 'animated' = 0,
   emotionOverride?: CharacterEmotion,
+  renderMode: CharacterRenderMode = 'FeetCenter',
 ): string {
   // Notice ladder/rope frames have no face emotion; normalize emotion to default on ladder/rope so all frames share cache
   const isBackAction = action === 'ladder' || action === 'rope';
@@ -249,6 +259,7 @@ export function buildCharacterSpriteUrl(
     name: '',
     flipX: 'false',
   });
+  if (renderMode === 'FeetCenter') params.set('renderMode', 'FeetCenter');
 
   return `/api/maple/character/${finalEncoded}/${action}/${frame}?${params.toString()}`;
 }

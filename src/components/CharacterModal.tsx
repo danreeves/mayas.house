@@ -23,7 +23,10 @@ export function CharacterModal(props: CharacterModalProps) {
 
   let fileInputRef: HTMLInputElement | undefined;
 
-  const previewUrl = () => buildCharacterSpriteUrl(draft(), 'stand1', 0, 'default');
+  // The preview card wants a tight portrait crop, so this one keeps the default
+  // "Full" render mode; the world canvas uses FeetCenter anchoring instead.
+  const previewUrl = () =>
+    buildCharacterSpriteUrl(draft(), 'stand1', 0, 'default', 'Full');
 
   const handleRandomize = () => {
     const next = generateRandomCharacter(nameInput());

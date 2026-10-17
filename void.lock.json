@@ -7,10 +7,17 @@
         "pattern": "mayas.house",
         "custom_domain": true
       }
-    ]
+    ],
+    "workers_dev": true
   },
   "resolved": {
     "name": "mayas-house",
+    "routes": [
+      {
+        "pattern": "mayas.house",
+        "custom_domain": true
+      }
+    ],
     "durable_objects": {
       "bindings": [
         {
@@ -27,12 +34,7 @@
         ]
       }
     ],
-    "routes": [
-      {
-        "pattern": "mayas.house",
-        "custom_domain": true
-      }
-    ]
+    "workers_dev": true
   },
-  "text": "{\n  \"name\": \"mayas-house\",\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"MayaChannelWs\",\n        \"class_name\": \"MayaChannelWs\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-ws-v1\",\n      \"new_sqlite_classes\": [\n        \"MayaChannelWs\"\n      ]\n    }\n  ],\n  \"routes\": [\n    {\n      \"pattern\": \"mayas.house\",\n      \"custom_domain\": true\n    }\n  ]\n}\n"
+  "text": "{\n  \"name\": \"mayas-house\",\n  \"routes\": [\n    {\n      \"pattern\": \"mayas.house\",\n      \"custom_domain\": true\n    }\n  ],\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"MayaChannelWs\",\n        \"class_name\": \"MayaChannelWs\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-ws-v1\",\n      \"new_sqlite_classes\": [\n        \"MayaChannelWs\"\n      ]\n    }\n  ],\n  \"workers_dev\": true\n}\n"
 }

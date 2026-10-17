@@ -1,4 +1,4 @@
-import type { MapleMapData, PlayerState } from '../types/maple';
+import type { CharacterAction, MapleMapData, PlayerState } from '../types/maple';
 import { getCharacterFrameImage, loadCachedImage } from './sprites';
 
 // World-space origin of GMS/94/map/100000001/render (1135 x 827)
@@ -208,6 +208,29 @@ function drawHenesysBackground(
   }
 }
 
+// Sprites are requested with renderMode=FeetCenter, so the character's feet sit on
+// the canvas centre and these offsets (measured against the live API per pose) say
+// how far below that centre the real ground contact is. Only a chair sit and the
+// prone pose contact the ground somewhere other than directly under the feet.
+const GROUND_OFFSET_BY_ACTION: Partial<Record<CharacterAction, number>> = {
+  prone: 3,
+  sit: 8,
+};
+const DEFAULT_GROUND_OFFSET = 1;
+
+// How far above the feet an average pose reaches at rest, used to keep name tags and
+// chat bubbles next to the head when equipment (capes, wings, auras) inflates the
+// sprite far past the character.
+const HEAD_HEIGHT_BY_ACTION: Partial<Record<CharacterAction, number>> = {
+  prone: 41,
+  sit: 55,
+  ladder: 60,
+  rope: 63,
+  alert: 66,
+  jump: 67,
+};
+const DEFAULT_HEAD_HEIGHT = 69;
+
 function drawPlayer(
   ctx: CanvasRenderingContext2D,
   player: PlayerState,
@@ -227,15 +250,19 @@ function drawPlayer(
     isMovingOnLadder,
   );
 
-  let headTopY = py - 68;
+  const headHeight =
+    HEAD_HEIGHT_BY_ACTION[player.action] ?? DEFAULT_HEAD_HEIGHT;
+  let headTopY = py - headHeight;
 
   if (sprite && sprite.width > 0 && sprite.height > 0) {
     const sw = sprite.width;
     const sh = sprite.height;
-    // Foot anchor: prone lowers body to ground, normal stands with feet at py + 2
-    const footYOffset = player.action === 'prone' ? 4 : 2;
-    const drawY = py - sh + footYOffset;
-    headTopY = drawY;
+    const groundOffset =
+      GROUND_OFFSET_BY_ACTION[player.action] ?? DEFAULT_GROUND_OFFSET;
+    // FeetCenter: canvas centre is the foot centre, so shift the canvas down by the
+    // half-height plus the measured ground offset.
+    const drawY = py - Math.floor(sh / 2) - groundOffset;
+    headTopY = Math.max(drawY, py - headHeight);
 
     ctx.save();
     ctx.translate(px, drawY);
