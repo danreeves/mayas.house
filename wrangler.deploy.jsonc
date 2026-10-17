@@ -1,0 +1,33 @@
+{
+  // Fallback Cloudflare deploy config: deploys the same artifact that
+  // `void build` produces (dist/ssr worker + dist/client assets), using the
+  // existing wrangler login. Use this when `void cloudflare login` is not
+  // available (Void's login requires an interactive terminal).
+  //
+  //   npm run build && npm run deploy:wrangler
+  //
+  // Keep this in sync with void.config.ts / .void-wrangler.jsonc
+  // (worker name, Durable Object class + migration tag).
+  "name": "mayas-house",
+  // Custom domain (mirrors void.config.ts `cloudflare.routes` so the wrangler
+  // deploy path attaches mayas.house too).
+  "routes": [{ "pattern": "mayas.house", "custom_domain": true }],
+  "workers_dev": true,
+  "main": "dist/ssr/index.js",
+  "compatibility_date": "2026-02-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "no_bundle": true,
+  "rules": [{ "type": "ESModule", "globs": ["**/*.js", "**/*.mjs"] }],
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "run_worker_first": ["/**"],
+    "directory": "dist/client"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "MayaChannelWs", "class_name": "MayaChannelWs" }]
+  },
+  "migrations": [{ "tag": "void-ws-v1", "new_sqlite_classes": ["MayaChannelWs"] }],
+  "upload_source_maps": true,
+  "observability": { "enabled": true }
+}

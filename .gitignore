@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output (produced by `npm run build`)
+dist/
+
+# Void / Wrangler local state and the generated Cloudflare config
+# (.void-wrangler.jsonc is materialized from void.config.ts + void.lock.json on
+# every build; void.lock.json is the checked-in source of truth)
+.void/
+.wrangler/
+.void-wrangler.jsonc
+
+# Local environment / secrets
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

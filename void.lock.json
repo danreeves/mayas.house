@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "source": {
+    "name": "mayas-house",
+    "routes": [
+      {
+        "pattern": "mayas.house",
+        "custom_domain": true
+      }
+    ]
+  },
+  "resolved": {
+    "name": "mayas-house",
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "MayaChannelWs",
+          "class_name": "MayaChannelWs"
+        }
+      ]
+    },
+    "migrations": [
+      {
+        "tag": "void-ws-v1",
+        "new_sqlite_classes": [
+          "MayaChannelWs"
+        ]
+      }
+    ],
+    "routes": [
+      {
+        "pattern": "mayas.house",
+        "custom_domain": true
+      }
+    ]
+  },
+  "text": "{\n  \"name\": \"mayas-house\",\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"MayaChannelWs\",\n        \"class_name\": \"MayaChannelWs\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-ws-v1\",\n      \"new_sqlite_classes\": [\n        \"MayaChannelWs\"\n      ]\n    }\n  ],\n  \"routes\": [\n    {\n      \"pattern\": \"mayas.house\",\n      \"custom_domain\": true\n    }\n  ]\n}\n"
+}

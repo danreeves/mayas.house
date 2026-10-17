@@ -1,0 +1,23 @@
+{
+  "name": "mayas-house",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "void deploy",
+    "deploy:wrangler": "wrangler deploy --config wrangler.deploy.jsonc"
+  },
+  "dependencies": {
+    "@void/solid": "1.1.11",
+    "solid-js": "^1.9.17",
+    "valibot": "^1.5.0",
+    "void": "1.1.11"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0"
+  }
+}
