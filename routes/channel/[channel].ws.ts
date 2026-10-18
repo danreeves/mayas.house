@@ -99,6 +99,10 @@ const ChatMessageSchema = v.object({
 const ClientMessage = v.variant('type', [
   v.object({
     type: v.literal('player.join'),
+    // Stable per-browser identity so a second tab is the same player instead of a
+    // duplicate character. Optional: older cached clients fall back to their
+    // connection id and simply behave like they used to.
+    clientId: v.optional(v.pipe(v.string(), v.minLength(8), v.maxLength(64))),
     name: v.string(),
     character: CharacterSchema,
     x: v.number(),
@@ -171,6 +175,11 @@ const ServerMessage = v.variant('type', [
     id: v.string(),
     name: v.string(),
   }),
+  // Sent to a connection that just lost its identity to a newer tab of the same
+  // browser; the tab stops playing until the user reclaims it.
+  v.object({
+    type: v.literal('session.replaced'),
+  }),
   v.object({
     type: v.literal('chat.message'),
     message: ChatMessageSchema,
@@ -218,8 +227,12 @@ export default defineRoom({
         ...event.character,
         name,
       };
+      // One player per browser: the tab's stable identity becomes the player id, so
+      // two tabs of the same browser are the same character rather than a duplicate.
+      const playerId = event.clientId ?? ctx.connection.id;
+
       const player: PlayerState = {
-        id: ctx.connection.id,
+        id: playerId,
         name,
         character,
         x: Math.max(-500, Math.min(700, event.x)),
@@ -234,10 +247,25 @@ export default defineRoom({
       };
 
       ctx.connection.setState(player);
+      // Broadcast before handing the identity over: closing another socket and then
+      // broadcasting in the same event silently drops the message for everyone.
       await ctx.room.broadcast({
         type: 'player.joined',
         player,
       });
+
+      // Newest tab wins: park any other connection still playing this identity. The
+      // tab closes its own socket when it gets this, which also avoids a dead socket
+      // sitting in the room.
+      for (const conn of ctx.room.getConnections()) {
+        if (conn.id === ctx.connection.id) continue;
+        const other = conn.state as PlayerState | undefined;
+        if (!other || other.id !== playerId) continue;
+        // Clearing the state stops it playing and keeps its eventual close from
+        // removing the character the new tab now owns.
+        conn.setState(null);
+        await conn.send({ type: 'session.replaced' }).catch(() => {});
+      }
       return;
     }
 
@@ -261,7 +289,7 @@ export default defineRoom({
       await ctx.room.broadcast(
         {
           type: 'player.moved',
-          id: ctx.connection.id,
+          id: current.id,
           x: updated.x,
           y: updated.y,
           vx: updated.vx,
@@ -290,7 +318,7 @@ export default defineRoom({
 
       await ctx.room.broadcast({
         type: 'player.emoted',
-        id: ctx.connection.id,
+        id: current.id,
         emotion: updated.emotion,
       });
       return;
@@ -322,7 +350,7 @@ export default defineRoom({
 
       const message: ChatMessage = {
         id: crypto.randomUUID(),
-        userId: ctx.connection.id,
+        userId: current.id,
         userName: current.name,
         text,
         timestamp: now,
@@ -340,11 +368,13 @@ export default defineRoom({
   },
   async onClose(ctx) {
     const current = ctx.connection.state as PlayerState | undefined;
+    // A connection parked by a newer tab has no state, so closing it must not
+    // remove the character the new tab is now playing.
     if (current) {
       await ctx.room.broadcast(
         {
           type: 'player.left',
-          id: ctx.connection.id,
+          id: current.id,
           name: current.name,
         },
         [ctx.connection.id],

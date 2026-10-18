@@ -40,6 +40,7 @@ import type {
 
 const STORAGE_CHAR_KEY = 'mayas_house_character_v1';
 const STORAGE_CHANNEL_KEY = 'mayas_house_channel_v1';
+const STORAGE_CLIENT_ID_KEY = 'mayas_house_client_id_v1';
 const CHANNELS = Array.from({ length: 19 }, (_, i) => String(i + 1));
 
 const EMOTE_HOTKEYS: Array<{
@@ -62,6 +63,19 @@ const MAYA_DIALOGUES = [
   'Thanks for stopping by my house in Henesys. Stay and chat awhile!',
 ];
 
+// Map data debugging is only useful while developing, so the toggle stays hidden
+// in production builds.
+function isLocalDevHost(): boolean {
+  if (typeof location === 'undefined') return false;
+  const host = location.hostname;
+  return (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '[::1]' ||
+    host.endsWith('.localhost')
+  );
+}
+
 function loadSavedCharacter(): MapleSimCharacter {
   try {
     const saved = localStorage.getItem(STORAGE_CHAR_KEY);
@@ -80,10 +94,38 @@ function loadSavedCharacter(): MapleSimCharacter {
   return generated;
 }
 
+/**
+ * Stable per-browser identity. Every tab of this browser joins as the same player,
+ * so opening a second tab hands the character over to it instead of spawning a
+ * duplicate that both tabs can drive independently.
+ */
+function loadClientId(): string {
+  try {
+    const saved = localStorage.getItem(STORAGE_CLIENT_ID_KEY);
+    if (saved && saved.length >= 8) return saved;
+  } catch {
+    // Ignore storage errors
+  }
+
+  const generated =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `client-${Math.random().toString(36).slice(2)}${Date.now()}`;
+
+  try {
+    localStorage.setItem(STORAGE_CLIENT_ID_KEY, generated);
+  } catch {
+    // Ignore storage quota errors
+  }
+  return generated;
+}
+
 export default function MayasHousePage() {
   const [channel, setChannel] = createSignal<string>('1');
   const [connected, setConnected] = createSignal(false);
   const [selfId, setSelfId] = createSignal('local');
+  // Set when another tab of this browser takes the character over.
+  const [sessionReplaced, setSessionReplaced] = createSignal(false);
   const [character, setCharacter] = createSignal<MapleSimCharacter>(
     generateRandomCharacter(),
   );
@@ -279,9 +321,13 @@ export default function MayasHousePage() {
 
     sock.on('open', () => {
       setConnected(true);
+      // A tab that lost its character to a newer tab stays connected as a passive
+      // viewer; joining again here would start a takeover ping-pong.
+      if (sessionReplaced()) return;
       const curChar = character();
       sock.send({
         type: 'player.join',
+        clientId: selfId(),
         name: curChar.name || 'Mapler',
         character: curChar,
         x: Math.round(physicsState.x),
@@ -299,11 +345,11 @@ export default function MayasHousePage() {
 
     sock.on('message', (event) => {
       if (event.type === 'channel.init') {
-        setSelfId(event.selfId);
         remotePlayerMap.clear();
         remoteSamples.clear();
         for (const p of event.players) {
-          if (p.id !== event.selfId) {
+          // Our own player is identified by this browser's id, not the connection.
+          if (p.id !== selfId()) {
             remotePlayerMap.set(p.id, p);
             trackRemoteSample(p.id, p.x, p.y, p.action, p.flipX);
             preloadCharacterCommonFrames(p.character);
@@ -311,9 +357,23 @@ export default function MayasHousePage() {
         }
         syncRemoteList();
         setMessages(event.messages);
+        if (!sessionReplaced()) {
+          appendSystemMessage(
+            `Connected to Maya's House — Channel ${event.channel}.`,
+          );
+        }
+        return;
+      }
+
+      if (event.type === 'session.replaced') {
+        // Another tab of this browser claimed the character. Close our own socket so
+        // the client does not try to reconnect and start a takeover ping-pong.
+        setSessionReplaced(true);
         appendSystemMessage(
-          `Connected to Maya's House — Channel ${event.channel}.`,
+          "You're playing in another tab — press Play in this tab to move back here.",
         );
+        activeSocket?.close();
+        activeSocket = null;
         return;
       }
 
@@ -406,6 +466,9 @@ export default function MayasHousePage() {
 
   onMount(() => {
     preloadMapAssets();
+
+    const clientId = loadClientId();
+    setSelfId(clientId);
 
     // Load saved character & channel
     const savedChar = loadSavedCharacter();
@@ -640,6 +703,7 @@ export default function MayasHousePage() {
 
       if (
         activeSocket &&
+        !sessionReplaced() &&
         ((movedDist >= 1.5 && nowPerf - lastBroadcastTime >= 55) ||
           stateChanged)
       ) {
@@ -767,6 +831,12 @@ export default function MayasHousePage() {
       connectToChannel(nextChannel);
       fadeToBlack = false;
     }, CHANNEL_FADE_MS);
+  };
+
+  const handleReclaimSession = () => {
+    setSessionReplaced(false);
+    // Rejoining is what takes the character back from the other tab.
+    connectToChannel(channel());
   };
 
   const handleSendChat = (e: Event) => {
@@ -946,13 +1016,15 @@ export default function MayasHousePage() {
           >
             {bgmEnabled() ? '🔊 BGM: On' : '🔇 BGM: Off'}
           </button>
-          <button
-            type="button"
-            class="ms-btn"
-            onClick={() => setShowFootholds((v) => !v)}
-          >
-            {showFootholds() ? '📐 Footholds: On' : '📐 Footholds'}
-          </button>
+          <Show when={isLocalDevHost()}>
+            <button
+              type="button"
+              class="ms-btn"
+              onClick={() => setShowFootholds((v) => !v)}
+            >
+              {showFootholds() ? '📐 Footholds: On' : '📐 Footholds'}
+            </button>
+          </Show>
           <button
             type="button"
             class="ms-btn"
@@ -1066,6 +1138,29 @@ export default function MayasHousePage() {
           </div>
         </div>
       </div>
+
+      {/* Another tab of this browser took the character over */}
+      <Show when={sessionReplaced()}>
+        <div class="ms-session-overlay">
+          <div class="ms-window ms-session-card">
+            <div class="ms-window-titlebar">
+              <span>PLAYING IN ANOTHER TAB</span>
+            </div>
+            <div class="ms-session-body">
+              <p class="ms-session-text">
+                Your character is being played in another tab of this browser.
+              </p>
+              <button
+                type="button"
+                class="ms-btn ms-btn-gold"
+                onClick={handleReclaimSession}
+              >
+                Play in this tab
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
 
       {/* Character & maples.im JSON Modal */}
       <Show when={charModalOpen()}>
