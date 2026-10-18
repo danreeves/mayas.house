@@ -81,31 +81,44 @@ export const EMOTE_PALETTE: CharacterEmotion[] = [
 ];
 
 // The render API draws every frame on demand, so warming a character means ~95
-// images. Trickling them through a small queue keeps the poses that are on screen
-// right now ahead of the emote variants, instead of firing everything at once.
-const MAX_CONCURRENT_PRELOADS = 4;
+// images and each one is a slow upstream render. Trickling them through a queue keeps
+// the poses that are on screen right now ahead of the emote variants, and gives the
+// bulk of the work (70 emote frames) a gentler pace so we do not get rate limited.
+const MAX_CONCURRENT_PRELOADS = { high: 4, low: 2 } as const;
 const preloadQueues: { high: string[]; low: string[] } = { high: [], low: [] };
 const queuedPreloads = new Set<string>();
-let activePreloads = 0;
+const activePreloads = { high: 0, low: 0 };
+
+type PreloadPriority = keyof typeof MAX_CONCURRENT_PRELOADS;
 
 function pumpPreloadQueue(): void {
-  while (activePreloads < MAX_CONCURRENT_PRELOADS) {
-    const url = preloadQueues.high.shift() ?? preloadQueues.low.shift();
-    if (!url) return;
+  for (;;) {
+    const priority: PreloadPriority | null =
+      preloadQueues.high.length > 0 &&
+      activePreloads.high < MAX_CONCURRENT_PRELOADS.high
+        ? 'high'
+        : preloadQueues.low.length > 0 &&
+            activePreloads.low < MAX_CONCURRENT_PRELOADS.low
+          ? 'low'
+          : null;
+    if (!priority) return;
+
+    const url = preloadQueues[priority].shift();
+    if (!url) continue;
     queuedPreloads.delete(url);
 
     const cached = imageCache.get(url);
     if (cached && (cached.loaded || cached.failed)) continue;
 
-    activePreloads += 1;
+    activePreloads[priority] += 1;
     loadCachedImage(url, () => {
-      activePreloads -= 1;
+      activePreloads[priority] -= 1;
       pumpPreloadQueue();
     });
   }
 }
 
-function enqueuePreload(url: string, priority: 'high' | 'low'): void {
+function enqueuePreload(url: string, priority: PreloadPriority): void {
   const cached = imageCache.get(url);
   if (cached && (cached.loaded || cached.failed)) return;
   if (queuedPreloads.has(url)) return;
