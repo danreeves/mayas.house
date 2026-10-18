@@ -106,6 +106,19 @@ body {
   font-weight: 700;
   cursor: pointer;
   outline: none;
+  /* Without this the native popup is a white sheet with the gold option text
+     on top of it; the option rule below covers browsers that ignore the scheme. */
+  color-scheme: dark;
+}
+
+.ms-channel-select option {
+  background: #16273f;
+  color: #f0f4fa;
+}
+
+.ms-channel-select option:checked {
+  background: #2d5a94;
+  color: #ffffff;
 }
 
 .ms-minimap-canvas-wrap {
