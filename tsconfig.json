@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["void/env"]
   },
-  "include": ["src", "pages", "routes", "void.config.ts", "vite.config.ts"]
+  "include": ["src", "pages", "routes", "durable-objects", "void.config.ts", "vite.config.ts"]
 }

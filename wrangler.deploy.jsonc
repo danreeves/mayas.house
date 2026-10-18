@@ -12,7 +12,9 @@
   // Custom domain (mirrors void.config.ts `cloudflare.routes` so the wrangler
   // deploy path attaches mayas.house too).
   "routes": [{ "pattern": "mayas.house", "custom_domain": true }],
-  "workers_dev": true,
+  // No workers.dev fallback: a second public hostname would expose the
+  // password-gated /admin API outside the custom domain.
+  "workers_dev": false,
   "main": "dist/ssr/index.js",
   "compatibility_date": "2026-02-24",
   "compatibility_flags": ["nodejs_compat"],
@@ -25,9 +27,18 @@
     "directory": "dist/client"
   },
   "durable_objects": {
-    "bindings": [{ "name": "MayaChannelWs", "class_name": "MayaChannelWs" }]
+    "bindings": [
+      { "name": "MayaChannelWs", "class_name": "MayaChannelWs" },
+      { "name": "FAME_REGISTRY", "class_name": "FameRegistryDurableObject" }
+    ]
   },
-  "migrations": [{ "tag": "void-ws-v1", "new_sqlite_classes": ["MayaChannelWs"] }],
+  "migrations": [
+    { "tag": "void-ws-v1", "new_sqlite_classes": ["MayaChannelWs"] },
+    {
+      "tag": "void-durable-fame-registry-v1",
+      "new_sqlite_classes": ["FameRegistryDurableObject"]
+    }
+  ],
   "upload_source_maps": true,
   "observability": { "enabled": true }
 }

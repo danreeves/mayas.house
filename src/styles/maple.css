@@ -403,6 +403,11 @@ body {
   border-color: #a9f57f;
 }
 
+.ms-btn-red {
+  background: linear-gradient(180deg, #d94c4c 0%, #8f1d1d 100%);
+  border-color: #ff9c9c;
+}
+
 .ms-close-btn {
   background: linear-gradient(180deg, #d94c4c 0%, #8f1d1d 100%);
   border: 1px solid #ff9c9c;
@@ -644,6 +649,164 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Player Info Window (double-click a character) */
+.ms-playercard {
+  width: min(400px, 100%);
+}
+
+.ms-playercard-body {
+  padding: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.ms-playercard-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 128px;
+  flex: 0 0 auto;
+}
+
+.ms-playercard-stage {
+  width: 128px;
+  height: 128px;
+  background: radial-gradient(circle at 50% 62%, #33547f 0%, #131f33 100%);
+  border: 2px solid #8fb0d8;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.ms-playercard-stage img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.ms-playercard-nametag {
+  width: 100%;
+  text-align: center;
+  font-weight: 700;
+  font-size: 12px;
+  color: #ffffff;
+  background: linear-gradient(180deg, #707d8d 0%, #414a56 100%);
+  border: 1px solid #aab6c4;
+  border-radius: 11px;
+  padding: 3px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+}
+
+.ms-playercard-right {
+  flex: 1;
+  min-width: 172px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ms-playercard-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ms-playercard-label {
+  min-width: 60px;
+  text-align: center;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #ffffff;
+  background: linear-gradient(180deg, #f074a6 0%, #c8366f 100%);
+  border: 1px solid #ff9fc4;
+  border-radius: 4px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+}
+
+.ms-playercard-value {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 10px;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+  color: #eaf2ff;
+  background: rgba(9, 16, 29, 0.85);
+  border: 1px solid rgba(107, 143, 194, 0.5);
+  border-radius: 4px;
+}
+
+.ms-playercard-value.positive {
+  color: #8dff9b;
+}
+
+.ms-playercard-value.negative {
+  color: #ff8f8f;
+}
+
+.ms-playercard-value.zero {
+  color: #cfd9ea;
+}
+
+.ms-fame-buttons {
+  display: flex;
+  gap: 3px;
+}
+
+.ms-fame-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: #ffffff;
+  background: linear-gradient(180deg, #35598f 0%, #1c3459 100%);
+  border: 1px solid #759cd4;
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.ms-fame-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+  border-color: #ffdf75;
+}
+
+.ms-fame-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ms-playercard-fame-hint {
+  font-size: 10px;
+  color: #b9cdec;
+  min-height: 12px;
+}
+
+.ms-playercard-mute {
+  align-self: flex-start;
+}
+
+.ms-playercard-report {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.ms-playercard-report .ms-input {
+  flex: 1;
+  min-width: 0;
 }
 
 @media (max-width: 760px) {

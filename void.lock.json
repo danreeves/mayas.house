@@ -8,7 +8,7 @@
         "custom_domain": true
       }
     ],
-    "workers_dev": true
+    "workers_dev": false
   },
   "resolved": {
     "name": "mayas-house",
@@ -18,11 +18,16 @@
         "custom_domain": true
       }
     ],
+    "workers_dev": false,
     "durable_objects": {
       "bindings": [
         {
           "name": "MayaChannelWs",
           "class_name": "MayaChannelWs"
+        },
+        {
+          "name": "FAME_REGISTRY",
+          "class_name": "FameRegistryDurableObject"
         }
       ]
     },
@@ -32,9 +37,14 @@
         "new_sqlite_classes": [
           "MayaChannelWs"
         ]
+      },
+      {
+        "tag": "void-durable-fame-registry-v1",
+        "new_sqlite_classes": [
+          "FameRegistryDurableObject"
+        ]
       }
-    ],
-    "workers_dev": true
+    ]
   },
-  "text": "{\n  \"name\": \"mayas-house\",\n  \"routes\": [\n    {\n      \"pattern\": \"mayas.house\",\n      \"custom_domain\": true\n    }\n  ],\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"MayaChannelWs\",\n        \"class_name\": \"MayaChannelWs\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-ws-v1\",\n      \"new_sqlite_classes\": [\n        \"MayaChannelWs\"\n      ]\n    }\n  ],\n  \"workers_dev\": true\n}\n"
+  "text": "{\n  \"name\": \"mayas-house\",\n  \"routes\": [\n    {\n      \"pattern\": \"mayas.house\",\n      \"custom_domain\": true\n    }\n  ],\n  \"workers_dev\": false,\n  \"durable_objects\": {\n    \"bindings\": [\n      {\n        \"name\": \"MayaChannelWs\",\n        \"class_name\": \"MayaChannelWs\"\n      },\n      {\n        \"name\": \"FAME_REGISTRY\",\n        \"class_name\": \"FameRegistryDurableObject\"\n      }\n    ]\n  },\n  \"migrations\": [\n    {\n      \"tag\": \"void-ws-v1\",\n      \"new_sqlite_classes\": [\n        \"MayaChannelWs\"\n      ]\n    },\n    {\n      \"tag\": \"void-durable-fame-registry-v1\",\n      \"new_sqlite_classes\": [\n        \"FameRegistryDurableObject\"\n      ]\n    }\n  ]\n}\n"
 }

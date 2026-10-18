@@ -12,6 +12,11 @@ import { generateRandomCharacter } from '../src/character/generator';
 import { normalizeMapleSimCharacter } from '../src/character/parser';
 import { CharacterModal } from '../src/components/CharacterModal';
 import {
+  PlayerCardModal,
+  type PlayerCardTarget,
+  type PlayerFameStatus,
+} from '../src/components/PlayerCardModal';
+import {
   type InputState,
   type LocalPhysicsState,
   findFootholdBelow,
@@ -42,6 +47,7 @@ import type {
 const STORAGE_CHAR_KEY = 'mayas_house_character_v1';
 const STORAGE_CHANNEL_KEY = 'mayas_house_channel_v1';
 const STORAGE_CLIENT_ID_KEY = 'mayas_house_client_id_v1';
+const STORAGE_MUTED_KEY = 'mayas_house_muted_v1';
 const CHANNELS = Array.from({ length: 19 }, (_, i) => String(i + 1));
 
 const EMOTE_LABELS: Record<CharacterEmotion, string> = {
@@ -146,6 +152,29 @@ function loadClientId(): string {
   return generated;
 }
 
+function loadMutedIds(): Set<string> {
+  try {
+    const saved = localStorage.getItem(STORAGE_MUTED_KEY);
+    if (saved) {
+      const parsed: unknown = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((id): id is string => typeof id === 'string'));
+      }
+    }
+  } catch {
+    // Ignore invalid localStorage entry
+  }
+  return new Set();
+}
+
+function saveMutedIds(ids: Set<string>): void {
+  try {
+    localStorage.setItem(STORAGE_MUTED_KEY, JSON.stringify(Array.from(ids)));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 export default function MayasHousePage() {
   const [channel, setChannel] = createSignal<string>('1');
   const [connected, setConnected] = createSignal(false);
@@ -166,6 +195,12 @@ export default function MayasHousePage() {
   const [activeEmotion, setActiveEmotion] =
     createSignal<CharacterEmotion>('default');
   const [isSitting, setIsSitting] = createSignal(false);
+  const [playerCard, setPlayerCard] = createSignal<PlayerCardTarget | null>(null);
+  const [fameById, setFameById] = createSignal<Record<string, PlayerFameStatus>>(
+    {},
+  );
+  const [mutedIds, setMutedIds] = createSignal<Set<string>>(loadMutedIds());
+  const [reportedIds, setReportedIds] = createSignal<Set<string>>(new Set());
 
   let canvasRef: HTMLCanvasElement | undefined;
   let chatInputRef: HTMLInputElement | undefined;
@@ -334,6 +369,108 @@ export default function MayasHousePage() {
       },
     ]);
     scrollToBottom();
+  };
+
+  // --- Player info window (double-click a character) ---
+
+  const buildSelfPlayer = (): PlayerState => {
+    const curChar = character();
+    return {
+      id: selfId(),
+      name: curChar.name || 'Mapler',
+      character: curChar,
+      x: physicsState.x,
+      y: physicsState.y,
+      vx: physicsState.vx,
+      vy: physicsState.vy,
+      action: physicsState.action,
+      emotion: activeEmotion(),
+      flipX: physicsState.flipX,
+      footholdId: physicsState.footholdId,
+      updatedAt: Date.now(),
+    };
+  };
+
+  // A canvas point (CSS pixels) to the player standing under it. The canvas uses
+  // the camera at its centre at 1:1 with its CSS size, so screen -> world is a
+  // single offset.
+  const hitTestPlayer = (
+    screenX: number,
+    screenY: number,
+  ): { player: PlayerState; isSelf: boolean } | null => {
+    if (!canvasRef) return null;
+    const worldX = screenX - canvasRef.width / 2 + cameraX;
+    const worldY = screenY - canvasRef.height / 2 + cameraY;
+
+    let best: { player: PlayerState; isSelf: boolean } | null = null;
+    let bestDist = Infinity;
+
+    const consider = (player: PlayerState, isSelf: boolean) => {
+      const px = player.x;
+      const py = player.y;
+      // Generous box: sprites reach ~100px above the feet, and the name tag sits
+      // just below them.
+      if (worldX < px - 34 || worldX > px + 34) return;
+      if (worldY < py - 100 || worldY > py + 22) return;
+      const dx = worldX - px;
+      const dy = worldY - (py - 40);
+      const dist = dx * dx + dy * dy;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = { player, isSelf };
+      }
+    };
+
+    for (const remote of remotePlayerMap.values()) consider(remote, false);
+    consider(buildSelfPlayer(), true);
+    return best;
+  };
+
+  const openPlayerCard = (entry: { player: PlayerState; isSelf: boolean }) => {
+    const id = entry.player.id;
+    setPlayerCard({
+      id,
+      name: entry.player.name,
+      character: entry.player.character,
+      isSelf: entry.isSelf,
+    });
+    // Drop any stale count; the server answers with the authoritative one.
+    setFameById((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    activeSocket?.send({ type: 'player.fame.query', id });
+  };
+
+  const toggleMute = (id: string) => {
+    setMutedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      saveMutedIds(next);
+      return next;
+    });
+    // A muted player's lingering speech bubble should disappear immediately.
+    chatBubbles.delete(id);
+  };
+
+  const giveFame = (id: string, direction: 'up' | 'down') => {
+    activeSocket?.send({ type: 'player.fame.give', id, direction });
+  };
+
+  const reportPlayer = (id: string, reason: string) => {
+    activeSocket?.send({
+      type: 'player.report',
+      id,
+      reason: reason.trim().slice(0, 200) || undefined,
+    });
+    setReportedIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
   };
 
   const triggerEmotion = (emotion: CharacterEmotion) => {
@@ -518,6 +655,7 @@ export default function MayasHousePage() {
         // stop receiving updates the tab that is actually playing already gets, and so
         // the client cannot reconnect and start a takeover ping-pong.
         setSessionReplaced(true);
+        setPlayerCard(null);
         inputState.left = false;
         inputState.right = false;
         inputState.up = false;
@@ -604,6 +742,11 @@ export default function MayasHousePage() {
           event.player.flipX,
         );
         preloadCharacterFrames(event.player.character);
+        if (playerCard()?.id === event.player.id) {
+          setPlayerCard((prev) =>
+            prev ? { ...prev, name: next.name, character: next.character } : prev,
+          );
+        }
         syncRemoteList();
         return;
       }
@@ -612,17 +755,57 @@ export default function MayasHousePage() {
         remotePlayerMap.delete(event.id);
         remoteSamples.delete(event.id);
         chatBubbles.delete(event.id);
+        if (playerCard()?.id === event.id) setPlayerCard(null);
         syncRemoteList();
         return;
       }
 
       if (event.type === 'chat.message') {
         setMessages((prev) => [...prev.slice(-79), event.message]);
-        chatBubbles.set(event.message.userId, {
-          text: event.message.text,
-          expiresAt: Date.now() + 5500,
-        });
+        if (mutedIds().has(event.message.userId)) {
+          chatBubbles.delete(event.message.userId);
+        } else {
+          chatBubbles.set(event.message.userId, {
+            text: event.message.text,
+            expiresAt: Date.now() + 5500,
+          });
+        }
         scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'player.fame') {
+        setFameById((prev) => ({
+          ...prev,
+          [event.id]: {
+            fame: event.fame,
+            canFame: event.canFame,
+            nextAt: event.nextAt,
+          },
+        }));
+        return;
+      }
+
+      if (event.type === 'player.fame.changed') {
+        // Someone fame'd a player: update the count but keep this viewer's own
+        // weekly eligibility.
+        setFameById((prev) => {
+          const current = prev[event.id];
+          return {
+            ...prev,
+            [event.id]: {
+              fame: event.fame,
+              canFame: current ? current.canFame : true,
+              nextAt: current ? current.nextAt : 0,
+            },
+          };
+        });
+        return;
+      }
+
+      if (event.type === 'server.notice') {
+        appendSystemMessage(event.text);
+        return;
       }
     });
   };
@@ -678,14 +861,14 @@ export default function MayasHousePage() {
       const emoteMatch = EMOTE_HOTKEYS.find((em) => em.key === e.key);
       if (emoteMatch) {
         e.preventDefault();
-        if (!isTyping && !charModalOpen() && !sessionReplaced()) {
+        if (!isTyping && !charModalOpen() && !playerCard() && !sessionReplaced()) {
           triggerEmotion(emoteMatch.emotion);
         }
         return;
       }
 
       if (e.key === 'Enter') {
-        if (!isTyping && !charModalOpen()) {
+        if (!isTyping && !charModalOpen() && !playerCard()) {
           e.preventDefault();
           chatInputRef?.focus();
           return;
@@ -701,9 +884,13 @@ export default function MayasHousePage() {
           setCharModalOpen(false);
           return;
         }
+        if (playerCard()) {
+          setPlayerCard(null);
+          return;
+        }
       }
 
-      if (isTyping || charModalOpen()) return;
+      if (isTyping || charModalOpen() || playerCard()) return;
 
       // A parked tab does not drive the character; the tab that owns it does.
       if (sessionReplaced()) return;
@@ -776,6 +963,17 @@ export default function MayasHousePage() {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('blur', handleBlur);
+
+    // Double-clicking a character opens its player-info window. Bound natively
+    // because the canvas is redrawn every frame, so per-player hit targets cannot
+    // be separate DOM nodes.
+    const handleCanvasDblClick = (e: MouseEvent) => {
+      if (!canvasRef) return;
+      const rect = canvasRef.getBoundingClientRect();
+      const hit = hitTestPlayer(e.clientX - rect.left, e.clientY - rect.top);
+      if (hit) openPlayerCard(hit);
+    };
+    canvasRef?.addEventListener('dblclick', handleCanvasDblClick);
 
     // 60fps Game & Canvas Render Loop
     let animId = 0;
@@ -922,6 +1120,7 @@ export default function MayasHousePage() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
+      canvasRef?.removeEventListener('dblclick', handleCanvasDblClick);
       activeSocket?.close();
     });
   });
@@ -942,6 +1141,7 @@ export default function MayasHousePage() {
 
   const handleChannelChange = (nextChannel: string) => {
     if (nextChannel === channel() || channelSwitchTimer) return;
+    setPlayerCard(null);
     setChannel(nextChannel);
     try {
       localStorage.setItem(STORAGE_CHANNEL_KEY, nextChannel);
@@ -1012,12 +1212,25 @@ export default function MayasHousePage() {
 
   const totalOnline = createMemo(() => remotePlayers().length + 1);
 
+  // Chat from players this browser muted is hidden from the log (speech bubbles
+  // are suppressed where they are received).
+  const visibleMessages = createMemo(() =>
+    messages().filter((msg) => msg.system || !mutedIds().has(msg.userId)),
+  );
+
   return (
     <div class="ms-app">
       <canvas
         ref={canvasRef}
         class="ms-canvas"
-        onClick={() => {
+        onClick={(e) => {
+          // A click on a character is a selection, not a Maya nudge.
+          if (canvasRef) {
+            const rect = canvasRef.getBoundingClientRect();
+            if (hitTestPlayer(e.clientX - rect.left, e.clientY - rect.top)) {
+              return;
+            }
+          }
           // Clicking NPC Maya area triggers a fresh dialogue line
           const line =
             MAYA_DIALOGUES[Math.floor(Math.random() * MAYA_DIALOGUES.length)];
@@ -1189,6 +1402,10 @@ export default function MayasHousePage() {
               <span class="ms-key">F1 – F7</span>
             </div>
             <div class="ms-controls-row">
+              <span>Player Info</span>
+              <span class="ms-key">Double-click</span>
+            </div>
+            <div class="ms-controls-row">
               <span>Chat</span>
               <span class="ms-key">Enter</span>
             </div>
@@ -1200,7 +1417,7 @@ export default function MayasHousePage() {
       <div class="ms-bottom-hud">
         <div class="ms-window ms-chat-panel">
           <div ref={chatHistoryRef} class="ms-chat-history">
-            <For each={messages()}>
+            <For each={visibleMessages()}>
               {(msg) => (
                 <div class={`ms-chat-line ${msg.system ? 'system' : ''}`}>
                   <Show
@@ -1297,6 +1514,22 @@ export default function MayasHousePage() {
           onSave={handleSaveCharacter}
           onClose={() => setCharModalOpen(false)}
         />
+      </Show>
+
+      {/* Double-click a character: player info with fame / mute / report */}
+      <Show when={playerCard()}>
+        {(card) => (
+          <PlayerCardModal
+            player={card()}
+            fame={fameById()[card().id]}
+            muted={mutedIds().has(card().id)}
+            reported={reportedIds().has(card().id)}
+            onFame={(direction) => giveFame(card().id, direction)}
+            onToggleMute={() => toggleMute(card().id)}
+            onReport={(reason) => reportPlayer(card().id, reason)}
+            onClose={() => setPlayerCard(null)}
+          />
+        )}
       </Show>
     </div>
   );

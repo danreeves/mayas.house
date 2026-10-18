@@ -1,0 +1,191 @@
+/* Admin moderation panel (/admin). Reuses the Maple window/button theme. */
+.ms-admin-page {
+  position: fixed;
+  inset: 0;
+  overflow: auto;
+  padding: 18px 22px 40px;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(60, 101, 156, 0.35) 0%, transparent 55%),
+    #0d1522;
+}
+
+/* The game stylesheet disables selection everywhere; reports are meant to be read. */
+.ms-admin-page,
+.ms-admin-page * {
+  user-select: text;
+}
+
+.ms-admin-center {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ms-admin-login {
+  width: min(340px, 100%);
+}
+
+.ms-admin-login-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+
+.ms-admin-label {
+  font-size: 11px;
+  color: #b9cdec;
+  letter-spacing: 0.4px;
+}
+
+.ms-admin-error {
+  margin: 0;
+  color: #ff9c9c;
+  font-size: 11px;
+}
+
+.ms-admin-loading {
+  color: #b9cdec;
+}
+
+.ms-admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.ms-admin-header h1 {
+  margin: 0;
+  font-size: 18px;
+  color: #ffea8a;
+  letter-spacing: 0.5px;
+}
+
+.ms-admin-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ms-admin-status {
+  font-size: 11px;
+  color: #9fe0a3;
+}
+
+.ms-admin-section {
+  margin-bottom: 22px;
+  background: rgba(15, 24, 42, 0.75);
+  border: 1px solid #3f5f8e;
+  border-radius: 7px;
+  padding: 12px 14px;
+}
+
+.ms-admin-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ms-admin-section-head h2 {
+  margin: 0;
+  font-size: 13px;
+  color: #d9e6fb;
+  letter-spacing: 0.4px;
+}
+
+.ms-admin-empty {
+  margin: 0;
+  color: #8fa6c8;
+  font-size: 12px;
+}
+
+.ms-admin-table-wrap {
+  overflow-x: auto;
+}
+
+.ms-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.ms-admin-table th,
+.ms-admin-table td {
+  text-align: left;
+  padding: 7px 9px;
+  border-bottom: 1px solid rgba(89, 121, 168, 0.32);
+  vertical-align: top;
+}
+
+.ms-admin-table th {
+  color: #9ec2ff;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.ms-admin-table tbody tr:hover {
+  background: rgba(60, 101, 156, 0.14);
+}
+
+.ms-admin-nowrap {
+  white-space: nowrap;
+}
+
+.ms-admin-mono {
+  font-family: Consolas, 'Courier New', monospace;
+  color: #cfe0f7;
+}
+
+.ms-admin-fame {
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.ms-admin-fame.positive {
+  color: #8dff9b;
+}
+
+.ms-admin-fame.negative {
+  color: #ff8f8f;
+}
+
+.ms-admin-muted {
+  color: #7f94b4;
+}
+
+.ms-admin-chat-cell {
+  max-width: 340px;
+}
+
+.ms-admin-chat {
+  margin: 0;
+  padding-left: 15px;
+}
+
+.ms-admin-chat li {
+  color: #d6e4fc;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 1px 0;
+}
+
+.ms-admin-ban-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.ms-admin-ban-form .ms-input {
+  flex: 1;
+  min-width: 160px;
+}

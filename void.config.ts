@@ -28,8 +28,8 @@ export default defineConfig({
     // the zone pinned to this account. `void domain add mayas.house` writes the
     // same route into the generated .void-wrangler.jsonc.
     routes: [{ pattern: 'mayas.house', custom_domain: true }],
-    // Keep the workers.dev URL alive as a fallback: attaching a custom domain
-    // disables it unless this is explicit.
-    workers_dev: true,
+    // No workers.dev fallback: a second public hostname would expose the
+    // password-gated /admin API outside the custom domain.
+    workers_dev: false,
   },
 });
