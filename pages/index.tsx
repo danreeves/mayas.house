@@ -228,6 +228,8 @@ export default function MayasHousePage() {
   // Channel changes fade out, respawn at the map's spawn portal, then fade back in
   // while the new channel's socket connects.
   const CHANNEL_FADE_MS = 260;
+  // How long to wait for the channel snapshot before joining anyway.
+  const JOIN_AFTER_INIT_TIMEOUT_MS = 1500;
   let fadeAlpha = 0;
   let fadeToBlack = false;
   let channelSwitchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -254,6 +256,57 @@ export default function MayasHousePage() {
     if (samples.length > REMOTE_SAMPLE_LIMIT) {
       samples.splice(0, samples.length - REMOTE_SAMPLE_LIMIT);
     }
+  };
+
+  // Play a tracked position back slightly behind the newest packet so it runs at the
+  // real walking speed and stays smooth despite the low update rate.
+  const interpolatePlayback = (
+    id: string,
+    target: { x: number; y: number; action: CharacterAction; flipX: boolean },
+    renderTime: number,
+  ) => {
+    const samples = remoteSamples.get(id);
+    if (!samples || samples.length === 0) return;
+
+    const newest = samples[samples.length - 1];
+    if (samples.length === 1) {
+      target.x = newest.x;
+      target.y = newest.y;
+      target.action = newest.action;
+      target.flipX = newest.flipX;
+      return;
+    }
+
+    // Only predict past the newest packet while they are actually moving, and never by
+    // much: a standing player must not keep sliding forward.
+    const moving = newest.action === 'walk1' || newest.action === 'jump';
+    const t = Math.min(
+      renderTime,
+      newest.t + (moving ? REMOTE_EXTRAPOLATE_MS : 0),
+    );
+
+    let i = 0;
+    while (i < samples.length - 2 && samples[i + 1].t <= t) i += 1;
+    const a = samples[i];
+    const b = samples[i + 1];
+    const span = b.t - a.t;
+    const alpha = span > 0 ? (t - a.t) / span : 1;
+
+    if (Math.abs(b.x - a.x) + Math.abs(b.y - a.y) > 200) {
+      // A jump this large is a teleport/respawn, not movement: don't slide.
+      target.x = b.x;
+      target.y = b.y;
+    } else {
+      target.x = a.x + (b.x - a.x) * alpha;
+      target.y = a.y + (b.y - a.y) * alpha;
+    }
+
+    // Pose comes from the start of the segment being interpolated, but once the stream
+    // goes quiet (player standing still) time clamps onto the newest sample, so that
+    // one wins: otherwise they stay stuck in their last moving pose (mid-jump, ...).
+    const pose = t >= b.t ? b : a;
+    target.action = pose.action;
+    target.flipX = pose.flipX;
   };
 
   const syncRemoteList = () => {
@@ -330,6 +383,61 @@ export default function MayasHousePage() {
     cameraY = target.y;
   };
 
+  // Take the character's authoritative state from the server. Whenever this tab takes
+  // it over (or rejoins), the character stays where it actually is instead of snapping
+  // back to where this tab was when it lost control.
+  const adoptServerState = (server: PlayerState) => {
+    physicsState.x = server.x;
+    physicsState.y = server.y;
+    physicsState.vx = 0;
+    physicsState.vy = 0;
+    physicsState.action = server.action;
+    physicsState.flipX = server.flipX;
+    physicsState.footholdId = server.footholdId;
+    physicsState.sitting = server.action === 'sit';
+    physicsState.ignoreFootholdId = null;
+    physicsState.ignoreFootholdUntil = 0;
+    physicsState.ladderCooldownUntil = 0;
+
+    // Was the other tab mid-climb? Grab the same ladder, or the character would drop
+    // off it the moment this tab takes over.
+    if (server.action === 'ladder' || server.action === 'rope') {
+      physicsState.onLadder =
+        (mapData()?.ladderRopes || []).find(
+          (ladder) =>
+            Math.abs(server.x - ladder.x) <= 20 &&
+            server.y >= ladder.y1 - 8 &&
+            server.y <= ladder.y2 + 8,
+        ) ?? null;
+    } else {
+      physicsState.onLadder = null;
+    }
+
+    setIsSitting(physicsState.sitting);
+
+    // Put the camera straight on the character so taking over does not pan the map.
+    const target = cameraTargetFor(physicsState.x, physicsState.y);
+    cameraX = target.x;
+    cameraY = target.y;
+  };
+
+  const sendJoin = (sock: ReturnType<typeof connect<'/channel/:channel'>> | null) => {
+    if (!sock) return;
+    const curChar = character();
+    sock.send({
+      type: 'player.join',
+      clientId: selfId(),
+      name: curChar.name || 'Mapler',
+      character: curChar,
+      x: Math.round(physicsState.x),
+      y: Math.round(physicsState.y),
+      action: physicsState.action,
+      emotion: activeEmotion(),
+      flipX: physicsState.flipX,
+      footholdId: physicsState.footholdId,
+    });
+  };
+
   const connectToChannel = (targetChannel: string) => {
     if (activeSocket) {
       activeSocket.close();
@@ -345,28 +453,37 @@ export default function MayasHousePage() {
     });
     activeSocket = sock;
 
+    // The channel snapshot is what tells a tab taking the character over where it
+    // already is, so we announce ourselves only once it has arrived. Falls back to a
+    // blind join if it never shows up.
+    let joined = false;
+    let joinFallback: ReturnType<typeof setTimeout> | null = null;
+    const joinWhenReady = () => {
+      if (joined) return;
+      joined = true;
+      if (joinFallback) {
+        clearTimeout(joinFallback);
+        joinFallback = null;
+      }
+      if (!sessionReplaced()) sendJoin(sock);
+    };
+
     sock.on('open', () => {
       setConnected(true);
-      // A tab that lost its character to a newer tab stays connected as a passive
-      // viewer; joining again here would start a takeover ping-pong.
+      // A tab that lost its character to a newer tab stays parked: joining again here
+      // would start a takeover ping-pong.
       if (sessionReplaced()) return;
-      const curChar = character();
-      sock.send({
-        type: 'player.join',
-        clientId: selfId(),
-        name: curChar.name || 'Mapler',
-        character: curChar,
-        x: Math.round(physicsState.x),
-        y: Math.round(physicsState.y),
-        action: physicsState.action,
-        emotion: activeEmotion(),
-        flipX: physicsState.flipX,
-        footholdId: physicsState.footholdId,
-      });
+      joined = false;
+      joinFallback = setTimeout(joinWhenReady, JOIN_AFTER_INIT_TIMEOUT_MS);
     });
 
     sock.on('close', () => {
       setConnected(false);
+      // Do not let a pending fallback join fire at a dead socket.
+      if (joinFallback) {
+        clearTimeout(joinFallback);
+        joinFallback = null;
+      }
     });
 
     sock.on('message', (event) => {
@@ -375,11 +492,15 @@ export default function MayasHousePage() {
         remoteSamples.clear();
         for (const p of event.players) {
           // Our own player is identified by this browser's id, not the connection.
-          if (p.id !== selfId()) {
-            remotePlayerMap.set(p.id, p);
-            trackRemoteSample(p.id, p.x, p.y, p.action, p.flipX);
-            preloadCharacterFrames(p.character);
+          if (p.id === selfId()) {
+            // Another tab of this browser already has the character: pick up exactly
+            // where it is, so joining does not drag the character here.
+            adoptServerState(p);
+            continue;
           }
+          remotePlayerMap.set(p.id, p);
+          trackRemoteSample(p.id, p.x, p.y, p.action, p.flipX);
+          preloadCharacterFrames(p.character);
         }
         syncRemoteList();
         setMessages(event.messages);
@@ -388,13 +509,21 @@ export default function MayasHousePage() {
             `Connected to Maya's House — Channel ${event.channel}.`,
           );
         }
+        joinWhenReady();
         return;
       }
 
       if (event.type === 'session.replaced') {
-        // Another tab of this browser claimed the character. Close our own socket so
-        // the client does not try to reconnect and start a takeover ping-pong.
+        // Another tab of this browser claimed the character. Close our own socket so we
+        // stop receiving updates the tab that is actually playing already gets, and so
+        // the client cannot reconnect and start a takeover ping-pong.
         setSessionReplaced(true);
+        inputState.left = false;
+        inputState.right = false;
+        inputState.up = false;
+        inputState.down = false;
+        inputState.jump = false;
+        inputState.sit = false;
         appendSystemMessage(
           "You're playing in another tab — press Play in this tab to move back here.",
         );
@@ -404,7 +533,13 @@ export default function MayasHousePage() {
       }
 
       if (event.type === 'player.joined') {
-        if (event.player.id === selfId()) return;
+        if (event.player.id === selfId()) {
+          // Our own echo, including when this tab just took the character back over:
+          // the server decided which position wins, so follow exactly what it settled
+          // on instead of keeping this tab's stale one.
+          adoptServerState(event.player);
+          return;
+        }
         remotePlayerMap.set(event.player.id, event.player);
         trackRemoteSample(
           event.player.id,
@@ -419,6 +554,8 @@ export default function MayasHousePage() {
       }
 
       if (event.type === 'player.moved') {
+        // The server never sends us our own moves; a parked tab has no socket at all.
+        if (event.id === selfId()) return;
         const existing = remotePlayerMap.get(event.id);
         if (existing) {
           existing.vx = event.vx;
@@ -556,6 +693,9 @@ export default function MayasHousePage() {
 
       if (isTyping || charModalOpen()) return;
 
+      // A parked tab does not drive the character; the tab that owns it does.
+      if (sessionReplaced()) return;
+
       // F1 - F7 Emotes
       const emoteMatch = EMOTE_HOTKEYS.find((em) => em.key === e.key);
       if (emoteMatch) {
@@ -648,6 +788,8 @@ export default function MayasHousePage() {
       const nowWall = Date.now();
 
       const map = mapData();
+      const remoteRenderTime = nowPerf - REMOTE_RENDER_DELAY_MS;
+
       if (map) {
         stepPhysics(physicsState, inputState, map, dt, nowWall);
         if (isSitting() !== physicsState.sitting) {
@@ -655,53 +797,8 @@ export default function MayasHousePage() {
         }
       }
 
-      // Play remote movement back slightly behind the newest packet so it runs at
-      // the right speed and stays smooth despite the low update rate.
-      const remoteRenderTime = nowPerf - REMOTE_RENDER_DELAY_MS;
-      for (const [id, remote] of remotePlayerMap) {
-        const samples = remoteSamples.get(id);
-        if (!samples || samples.length === 0) continue;
-
-        const newest = samples[samples.length - 1];
-        if (samples.length === 1) {
-          remote.x = newest.x;
-          remote.y = newest.y;
-          remote.action = newest.action;
-          remote.flipX = newest.flipX;
-          continue;
-        }
-
-        // Only predict past the newest packet while they are actually moving, and
-        // never by much: a standing player must not keep sliding forward.
-        const moving = newest.action === 'walk1' || newest.action === 'jump';
-        const t = Math.min(
-          remoteRenderTime,
-          newest.t + (moving ? REMOTE_EXTRAPOLATE_MS : 0),
-        );
-
-        let i = 0;
-        while (i < samples.length - 2 && samples[i + 1].t <= t) i += 1;
-        const a = samples[i];
-        const b = samples[i + 1];
-        const span = b.t - a.t;
-        const alpha = span > 0 ? (t - a.t) / span : 1;
-
-        if (Math.abs(b.x - a.x) + Math.abs(b.y - a.y) > 200) {
-          // A jump this large is a teleport/respawn, not movement: don't slide.
-          remote.x = b.x;
-          remote.y = b.y;
-        } else {
-          remote.x = a.x + (b.x - a.x) * alpha;
-          remote.y = a.y + (b.y - a.y) * alpha;
-        }
-
-        // Pose comes from the start of the segment being interpolated, but once the
-        // stream goes quiet (player standing still) time clamps onto the newest
-        // sample, so that one wins: otherwise remotes stay stuck in their last
-        // moving pose (mid-jump, prone, ...).
-        const pose = t >= b.t ? b : a;
-        remote.action = pose.action;
-        remote.flipX = pose.flipX;
+      for (const remote of remotePlayerMap.values()) {
+        interpolatePlayback(remote.id, remote, remoteRenderTime);
       }
 
       // Smooth camera tracking clamped to Maya's House bounds
@@ -861,7 +958,8 @@ export default function MayasHousePage() {
 
   const handleReclaimSession = () => {
     setSessionReplaced(false);
-    // Rejoining is what takes the character back from the other tab.
+    // Reconnecting is what takes the character back. The fresh channel snapshot is
+    // what tells us where the character is, so it never has to move to us.
     connectToChannel(channel());
   };
 

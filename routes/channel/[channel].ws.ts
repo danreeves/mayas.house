@@ -231,18 +231,29 @@ export default defineRoom({
       // two tabs of the same browser are the same character rather than a duplicate.
       const playerId = event.clientId ?? ctx.connection.id;
 
+      // The character belongs to the browser, not to whichever tab sent the join. If
+      // the identity is already playing, keep where it is: a tab taking the character
+      // over (or a brand new one) has to adopt that position rather than drag the
+      // character back to where this tab last saw it.
+      let existing: PlayerState | undefined;
+      for (const conn of ctx.room.getConnections()) {
+        if (conn.id === ctx.connection.id) continue;
+        const other = conn.state as PlayerState | undefined;
+        if (other && other.id === playerId) existing = other;
+      }
+
       const player: PlayerState = {
         id: playerId,
         name,
         character,
-        x: Math.max(-500, Math.min(700, event.x)),
-        y: Math.max(-300, Math.min(400, event.y)),
+        x: existing ? existing.x : Math.max(-500, Math.min(700, event.x)),
+        y: existing ? existing.y : Math.max(-300, Math.min(400, event.y)),
         vx: 0,
         vy: 0,
-        action: event.action,
+        action: existing ? existing.action : event.action,
         emotion: event.emotion,
-        flipX: event.flipX,
-        footholdId: event.footholdId,
+        flipX: existing ? existing.flipX : event.flipX,
+        footholdId: existing ? existing.footholdId : event.footholdId,
         updatedAt: now,
       };
 
