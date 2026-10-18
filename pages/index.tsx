@@ -25,8 +25,9 @@ import {
   renderScene,
 } from '../src/engine/renderer';
 import {
-  preloadCharacterCommonFrames,
+  EMOTE_PALETTE,
   preloadCharacterEmotionFrames,
+  preloadCharacterFrames,
 } from '../src/engine/sprites';
 import '../src/styles/maple.css';
 import type {
@@ -43,19 +44,44 @@ const STORAGE_CHANNEL_KEY = 'mayas_house_channel_v1';
 const STORAGE_CLIENT_ID_KEY = 'mayas_house_client_id_v1';
 const CHANNELS = Array.from({ length: 19 }, (_, i) => String(i + 1));
 
+const EMOTE_LABELS: Record<CharacterEmotion, string> = {
+  default: 'Default',
+  hit: 'Hit',
+  smile: 'Smile',
+  troubled: 'Troubled',
+  cry: 'Cry',
+  angry: 'Angry',
+  bewildered: 'Bewildered',
+  stunned: 'Stunned',
+  blaze: 'Blaze',
+  blink: 'Blink',
+  bowing: 'Bowing',
+  cheers: 'Cheers',
+  chu: 'Chu',
+  dam: 'Dam',
+  despair: 'Despair',
+  glitter: 'Glitter',
+  hot: 'Hot',
+  hum: 'Hum',
+  love: 'Love',
+  oops: 'Oops',
+  pain: 'Pain',
+  qBlue: 'Q Blue',
+  shine: 'Shine',
+  vomit: 'Vomit',
+  wink: 'Wink',
+};
+
+// F1..F7 map onto the palette the sprite cache preloads.
 const EMOTE_HOTKEYS: Array<{
   key: string;
   emotion: CharacterEmotion;
   label: string;
-}> = [
-  { key: 'F1', emotion: 'hit', label: 'Hit' },
-  { key: 'F2', emotion: 'smile', label: 'Smile' },
-  { key: 'F3', emotion: 'troubled', label: 'Troubled' },
-  { key: 'F4', emotion: 'cry', label: 'Cry' },
-  { key: 'F5', emotion: 'angry', label: 'Angry' },
-  { key: 'F6', emotion: 'bewildered', label: 'Bewildered' },
-  { key: 'F7', emotion: 'stunned', label: 'Stunned' },
-];
+}> = EMOTE_PALETTE.map((emotion, index) => ({
+  key: `F${index + 1}`,
+  emotion,
+  label: EMOTE_LABELS[emotion] ?? emotion,
+}));
 
 const MAYA_DIALOGUES = [
   '*Cough... Cough...* Ah... My head... Can somebody help me...?',
@@ -352,7 +378,7 @@ export default function MayasHousePage() {
           if (p.id !== selfId()) {
             remotePlayerMap.set(p.id, p);
             trackRemoteSample(p.id, p.x, p.y, p.action, p.flipX);
-            preloadCharacterCommonFrames(p.character);
+            preloadCharacterFrames(p.character);
           }
         }
         syncRemoteList();
@@ -387,7 +413,7 @@ export default function MayasHousePage() {
           event.player.action,
           event.player.flipX,
         );
-        preloadCharacterCommonFrames(event.player.character);
+        preloadCharacterFrames(event.player.character);
         syncRemoteList();
         return;
       }
@@ -440,7 +466,7 @@ export default function MayasHousePage() {
           event.player.action,
           event.player.flipX,
         );
-        preloadCharacterCommonFrames(event.player.character);
+        preloadCharacterFrames(event.player.character);
         syncRemoteList();
         return;
       }
@@ -477,7 +503,7 @@ export default function MayasHousePage() {
     physicsState.y = 274;
     physicsState.flipX = Boolean(savedChar.flipX);
     cameraX = physicsState.x;
-    preloadCharacterCommonFrames(savedChar);
+    preloadCharacterFrames(savedChar);
 
     const savedChannel = localStorage.getItem(STORAGE_CHANNEL_KEY) || '1';
     setChannel(savedChannel);
@@ -856,7 +882,7 @@ export default function MayasHousePage() {
 
   const handleSaveCharacter = (updated: MapleSimCharacter) => {
     setCharacter(updated);
-    preloadCharacterCommonFrames(updated);
+    preloadCharacterFrames(updated);
     try {
       localStorage.setItem(STORAGE_CHAR_KEY, JSON.stringify(updated));
     } catch {

@@ -10,6 +10,7 @@ interface CachedImage {
   loaded: boolean;
   failed: boolean;
   retries: number;
+  settledCallbacks: Array<() => void>;
 }
 
 const imageCache = new Map<string, CachedImage>();
@@ -40,9 +41,99 @@ export const ACTION_FRAME_DURATION_MS: Record<CharacterAction, number> = {
   alert: 400,
 };
 
-export function loadCachedImage(url: string): CachedImage {
+// Every animation the game can draw for a character, with the frame indices
+// getCharacterFrameImage cycles through. Ordered by how likely each is to be seen, so
+// the poses in play arrive first. Ladder/rope always render with a default face, so
+// they never need a per-emotion copy.
+const ACTION_PRELOADS: Array<{ action: CharacterAction; frames: number[] }> = [
+  { action: 'stand1', frames: [0, 1, 2] },
+  { action: 'walk1', frames: [0, 1, 2, 3] },
+  { action: 'jump', frames: [0] },
+  { action: 'prone', frames: [0] },
+  { action: 'sit', frames: [0] },
+  { action: 'ladder', frames: [0, 1] },
+  { action: 'rope', frames: [0, 1] },
+  { action: 'stand2', frames: [0, 1, 2] },
+  { action: 'walk2', frames: [0, 1, 2, 3] },
+  { action: 'alert', frames: [0, 1, 2] },
+];
+
+// Poses an emoting character can be caught in while the expression is up: an emote
+// lasts a few seconds, and the player can be walking, jumping, sitting or prone in it.
+const EMOTE_PRELOADS: Array<{ action: CharacterAction; frames: number[] }> = [
+  { action: 'stand1', frames: [0, 1, 2] },
+  { action: 'walk1', frames: [0, 1, 2, 3] },
+  { action: 'jump', frames: [0] },
+  { action: 'prone', frames: [0] },
+  { action: 'sit', frames: [0] },
+];
+
+// Emotions the room's emote bar can trigger. The page builds its hotkey list from
+// this, so the two can never drift apart.
+export const EMOTE_PALETTE: CharacterEmotion[] = [
+  'hit',
+  'smile',
+  'troubled',
+  'cry',
+  'angry',
+  'bewildered',
+  'stunned',
+];
+
+// The render API draws every frame on demand, so warming a character means ~95
+// images. Trickling them through a small queue keeps the poses that are on screen
+// right now ahead of the emote variants, instead of firing everything at once.
+const MAX_CONCURRENT_PRELOADS = 4;
+const preloadQueues: { high: string[]; low: string[] } = { high: [], low: [] };
+const queuedPreloads = new Set<string>();
+let activePreloads = 0;
+
+function pumpPreloadQueue(): void {
+  while (activePreloads < MAX_CONCURRENT_PRELOADS) {
+    const url = preloadQueues.high.shift() ?? preloadQueues.low.shift();
+    if (!url) return;
+    queuedPreloads.delete(url);
+
+    const cached = imageCache.get(url);
+    if (cached && (cached.loaded || cached.failed)) continue;
+
+    activePreloads += 1;
+    loadCachedImage(url, () => {
+      activePreloads -= 1;
+      pumpPreloadQueue();
+    });
+  }
+}
+
+function enqueuePreload(url: string, priority: 'high' | 'low'): void {
+  const cached = imageCache.get(url);
+  if (cached && (cached.loaded || cached.failed)) return;
+  if (queuedPreloads.has(url)) return;
+
+  queuedPreloads.add(url);
+  preloadQueues[priority].push(url);
+  pumpPreloadQueue();
+}
+
+/**
+ * @param onSettled Called once the image has loaded or exhausted its retries.
+ */
+export function loadCachedImage(
+  url: string,
+  onSettled?: () => void,
+): CachedImage {
   const existing = imageCache.get(url);
-  if (existing) return existing;
+  if (existing) {
+    if (onSettled) {
+      if (existing.loaded || existing.failed) {
+        // Never call back synchronously: callers pump queues from the callback.
+        setTimeout(onSettled, 0);
+      } else {
+        existing.settledCallbacks.push(onSettled);
+      }
+    }
+    return existing;
+  }
 
   const img = new Image();
   img.crossOrigin = 'anonymous';
@@ -51,11 +142,17 @@ export function loadCachedImage(url: string): CachedImage {
     loaded: false,
     failed: false,
     retries: 0,
+    settledCallbacks: onSettled ? [onSettled] : [],
+  };
+
+  const settle = () => {
+    for (const callback of entry.settledCallbacks.splice(0)) callback();
   };
 
   img.onload = () => {
     entry.loaded = true;
     entry.failed = false;
+    settle();
   };
   img.onerror = () => {
     if (entry.retries < 4) {
@@ -66,6 +163,7 @@ export function loadCachedImage(url: string): CachedImage {
       }, 1200 * entry.retries);
     } else {
       entry.failed = true;
+      settle();
     }
   };
   img.src = url;
@@ -73,39 +171,49 @@ export function loadCachedImage(url: string): CachedImage {
   return entry;
 }
 
-export function preloadCharacterCommonFrames(character: MapleSimCharacter): void {
-  const commonActions: Array<{ action: CharacterAction; frames: number[] }> = [
-    { action: 'stand1', frames: [0, 1, 2] },
-    { action: 'walk1', frames: [0, 1, 2, 3] },
-    { action: 'jump', frames: [0] },
-    { action: 'prone', frames: [0] },
-    { action: 'sit', frames: [0] },
-    { action: 'ladder', frames: [0, 1] },
-  ];
-
-  for (const { action, frames } of commonActions) {
+/**
+ * Warm everything a character can be drawn with: every animation frame up front, then
+ * the emote variants the emote bar can trigger. Called when a character spawns and
+ * again whenever it changes, so animations and emotes never pop in mid-play.
+ */
+export function preloadCharacterFrames(character: MapleSimCharacter): void {
+  for (const { action, frames } of ACTION_PRELOADS) {
     for (const frame of frames) {
-      const url = buildCharacterSpriteUrl(character, action, frame, 'default');
-      loadCachedImage(url);
+      enqueuePreload(
+        buildCharacterSpriteUrl(character, action, frame, 'default'),
+        'high',
+      );
+    }
+  }
+
+  for (const emotion of EMOTE_PALETTE) {
+    for (const { action, frames } of EMOTE_PRELOADS) {
+      for (const frame of frames) {
+        enqueuePreload(
+          buildCharacterSpriteUrl(character, action, frame, emotion),
+          'low',
+        );
+      }
     }
   }
 }
 
+/**
+ * Warm the frames for a single emotion, e.g. one someone just used that is not in the
+ * room's emote palette.
+ */
 export function preloadCharacterEmotionFrames(
   character: MapleSimCharacter,
   emotion: CharacterEmotion,
 ): void {
-  const commonActions: Array<{ action: CharacterAction; frames: number[] }> = [
-    { action: 'stand1', frames: [0, 1, 2] },
-    { action: 'walk1', frames: [0, 1, 2, 3] },
-    { action: 'jump', frames: [0] },
-    { action: 'prone', frames: [0] },
-    { action: 'sit', frames: [0] },
-  ];
+  if (emotion === 'default') return;
 
-  for (const { action, frames } of commonActions) {
+  for (const { action, frames } of EMOTE_PRELOADS) {
     for (const frame of frames) {
-      loadCachedImage(buildCharacterSpriteUrl(character, action, frame, emotion));
+      enqueuePreload(
+        buildCharacterSpriteUrl(character, action, frame, emotion),
+        'low',
+      );
     }
   }
 }
