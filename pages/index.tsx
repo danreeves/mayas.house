@@ -672,6 +672,18 @@ export default function MayasHousePage() {
       const activeTag = document.activeElement?.tagName.toLowerCase();
       const isTyping = activeTag === 'input' || activeTag === 'textarea';
 
+      // The function keys are the emote hotkeys, so they have to be claimed before
+      // anything else: F1 opens the browser's help and F5 would reload the room out
+      // from under us, losing our spot mid-game.
+      const emoteMatch = EMOTE_HOTKEYS.find((em) => em.key === e.key);
+      if (emoteMatch) {
+        e.preventDefault();
+        if (!isTyping && !charModalOpen() && !sessionReplaced()) {
+          triggerEmotion(emoteMatch.emotion);
+        }
+        return;
+      }
+
       if (e.key === 'Enter') {
         if (!isTyping && !charModalOpen()) {
           e.preventDefault();
@@ -695,14 +707,6 @@ export default function MayasHousePage() {
 
       // A parked tab does not drive the character; the tab that owns it does.
       if (sessionReplaced()) return;
-
-      // F1 - F7 Emotes
-      const emoteMatch = EMOTE_HOTKEYS.find((em) => em.key === e.key);
-      if (emoteMatch) {
-        e.preventDefault();
-        triggerEmotion(emoteMatch.emotion);
-        return;
-      }
 
       switch (e.code) {
         case 'ArrowLeft':
