@@ -28,6 +28,8 @@ import {
   type ActiveChatBubble,
   preloadMapAssets,
   renderScene,
+  WORLD_VERTICAL_BIAS,
+  WORLD_ZOOM,
 } from '../src/engine/renderer';
 import {
   EMOTE_PALETTE,
@@ -391,16 +393,18 @@ export default function MayasHousePage() {
     };
   };
 
-  // A canvas point (CSS pixels) to the player standing under it. The canvas uses
-  // the camera at its centre at 1:1 with its CSS size, so screen -> world is a
-  // single offset.
+  // A canvas point (CSS pixels) to the player standing under it. The canvas draws
+  // the camera point at its centre (shifted down by the vertical bias) and scales the
+  // world by WORLD_ZOOM, so inverting that maps screen -> world.
   const hitTestPlayer = (
     screenX: number,
     screenY: number,
   ): { player: PlayerState; isSelf: boolean } | null => {
     if (!canvasRef) return null;
-    const worldX = screenX - canvasRef.width / 2 + cameraX;
-    const worldY = screenY - canvasRef.height / 2 + cameraY;
+    const worldX = (screenX - canvasRef.width / 2) / WORLD_ZOOM + cameraX;
+    const worldY =
+      (screenY - canvasRef.height / 2 - WORLD_VERTICAL_BIAS) / WORLD_ZOOM +
+      cameraY;
 
     let best: { player: PlayerState; isSelf: boolean } | null = null;
     let bestDist = Infinity;

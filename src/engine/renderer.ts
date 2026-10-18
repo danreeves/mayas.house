@@ -7,6 +7,17 @@ export const MAP_RENDER_ORIGIN_Y = -265;
 export const MAP_RENDER_WIDTH = 1135;
 export const MAP_RENDER_HEIGHT = 827;
 
+// The world layer (map, portals, NPC, players) is drawn at this zoom so the house
+// fills the frame the way the game client frames it, with the camera point sitting
+// at the screen centre shifted down by WORLD_VERTICAL_BIAS screen pixels. The
+// parallax backdrop is scaled by the same factor so it stays behind the map.
+//
+// The zoom must stay a whole number: at a fractional scale the map's pixel art (and
+// the name tags and chat bubbles drawn in world space with it) lands between screen
+// pixels and shimmers.
+export const WORLD_ZOOM = 2;
+export const WORLD_VERTICAL_BIAS = 90;
+
 export interface ActiveChatBubble {
   text: string;
   expiresAt: number;
@@ -44,6 +55,62 @@ const PORTAL_FRAME_URLS = [
 const CHAT_BALLOON_PARTS = ['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'] as const;
 type ChatBalloonPart = (typeof CHAT_BALLOON_PARTS)[number];
 
+// The back entries of GMS 100000001 (background set grassySoil), in draw order.
+// x/y are the sprite origins in map coordinates and rx/ry the parallax percentages.
+// Types: 0 draw once, 1 tile across, 2 tile down, 3 tile both, 4 tile across.
+interface BackLayer {
+  url: string;
+  x: number;
+  y: number;
+  originX: number;
+  originY: number;
+  rx: number;
+  ry: number;
+  type: number;
+  underFill?: string;
+}
+
+const BACK_LAYERS: BackLayer[] = [
+  // Clouds: origin is the middle of the sprite, tiled across the sky.
+  {
+    url: BG_CLOUDS_URL,
+    x: 112,
+    y: 10,
+    originX: 512,
+    originY: 289,
+    rx: -5,
+    ry: -3,
+    type: 4,
+  },
+  // Distant grass hills. The strip carries the big tree's lower half, which the
+  // client hides behind the house; it is drawn once (type 0) rather than tiled so
+  // that half a tree never wanders into open ground.
+  {
+    url: BG_HILLS_URL,
+    x: 324,
+    y: 163,
+    originX: 1246,
+    originY: 170,
+    rx: -20,
+    ry: 3,
+    type: 0,
+    underFill: '#7da442',
+  },
+  // The tree that stands to the right of the house. The map data records the origin
+  // at y -141, which would leave it floating above the hills; the client draws it
+  // with its base on the ground.
+  {
+    url: BG_TREES_URL,
+    x: 203,
+    y: 141,
+    originX: 157,
+    originY: 134,
+    rx: -20,
+    ry: 3,
+    type: 0,
+  },
+];
+
 function getBalloonPartUrl(part: ChatBalloonPart): string {
   return `/api/maple/wz/img/GMS/93/UI/ChatBalloon.img/0/${part}`;
 }
@@ -74,15 +141,18 @@ export function renderScene(
   ctx.imageSmoothingEnabled = false;
 
   // 1. Draw Henesys Sky & Parallax Backgrounds
-  drawHenesysBackground(ctx, width, height, state.cameraX, state.cameraY, nowMs);
+  drawHenesysBackground(ctx, width, height, state.cameraX, state.cameraY);
 
-  // Convert world coordinates to screen coordinates
-  // Screen center follows cameraX, cameraY
-  const offsetX = Math.round(width / 2 - state.cameraX);
-  const offsetY = Math.round(height / 2 - state.cameraY);
-
+  // Convert world coordinates to screen coordinates. The camera point is pinned to
+  // the screen centre shifted down by the vertical bias, and the world is scaled by
+  // WORLD_ZOOM around that point. The translation is rounded in screen pixels so a
+  // whole-number zoom keeps world pixels on whole screen pixels.
   ctx.save();
-  ctx.translate(offsetX, offsetY);
+  ctx.translate(
+    Math.round(width / 2 - state.cameraX * WORLD_ZOOM),
+    Math.round(height / 2 + WORLD_VERTICAL_BIAS - state.cameraY * WORLD_ZOOM),
+  );
+  ctx.scale(WORLD_ZOOM, WORLD_ZOOM);
 
   // 2. Draw Maya's House Map Render
   const mapImg = loadCachedImage(MAP_RENDER_URL);
@@ -171,7 +241,6 @@ function drawHenesysBackground(
   height: number,
   cameraX: number,
   cameraY: number,
-  nowMs: number,
 ): void {
   // Base sky gradient matching Henesys grassySoil
   const grad = ctx.createLinearGradient(0, 0, 0, height);
@@ -181,29 +250,41 @@ function drawHenesysBackground(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, width, height);
 
-  // Scrolling clouds (back/1)
-  const clouds = loadCachedImage(BG_CLOUDS_URL);
-  if (clouds.loaded && clouds.img.width > 0) {
-    const cw = clouds.img.width;
-    const drift = ((nowMs * 0.015) + cameraX * 0.08) % cw;
-    const cloudY = Math.round(height * 0.14 - cameraY * 0.04);
-    for (let x = -drift - cw; x < width + cw; x += cw) {
-      ctx.drawImage(clouds.img, Math.round(x), cloudY);
-    }
-  }
+  for (const layer of BACK_LAYERS) {
+    const cached = loadCachedImage(layer.url);
+    if (!cached.loaded || cached.img.width === 0) continue;
 
-  // Distant hills (back/2)
-  const hills = loadCachedImage(BG_HILLS_URL);
-  if (hills.loaded && hills.img.width > 0) {
-    const hw = hills.img.width;
-    const hh = hills.img.height;
-    const parallaxX = ((cameraX * 0.18) % hw + hw) % hw;
-    const hillY = Math.round(height * 0.48 - cameraY * 0.08);
-    // Fill grassy tone below the hill horizon so tall viewports don't show sky below hills
-    ctx.fillStyle = '#7da442';
-    ctx.fillRect(0, hillY + hh - 4, width, Math.max(0, height - (hillY + hh - 4)));
-    for (let x = -parallaxX - hw; x < width + hw; x += hw) {
-      ctx.drawImage(hills.img, Math.round(x), hillY);
+    const img = cached.img;
+    const tw = img.width * WORLD_ZOOM;
+    const th = img.height * WORLD_ZOOM;
+
+    // rx/ry are the parallax percentages: the layer only shifts by that share of the
+    // camera's travel, so distant scenery barely moves.
+    const originX =
+      width / 2 + (layer.x + (cameraX * layer.rx) / 100 - cameraX) * WORLD_ZOOM;
+    const originY =
+      height / 2 +
+      WORLD_VERTICAL_BIAS +
+      (layer.y + (cameraY * layer.ry) / 100 - cameraY) * WORLD_ZOOM;
+    const left = originX - layer.originX * WORLD_ZOOM;
+    const top = originY - layer.originY * WORLD_ZOOM;
+
+    if (layer.underFill) {
+      ctx.fillStyle = layer.underFill;
+      ctx.fillRect(0, top + th - 2, width, Math.max(0, height - (top + th - 2)));
+    }
+
+    const tileX = layer.type === 1 || layer.type === 3 || layer.type === 4;
+    const tileY = layer.type === 2 || layer.type === 3;
+    const startX = tileX ? left + Math.floor(-left / tw) * tw : left;
+    const startY = tileY ? top + Math.floor(-top / th) * th : top;
+    const endX = tileX ? width : left + tw;
+    const endY = tileY ? height : top + th;
+
+    for (let y = startY; y < endY; y += th) {
+      for (let x = startX; x < endX; x += tw) {
+        ctx.drawImage(img, Math.round(x), Math.round(y), Math.round(tw), Math.round(th));
+      }
     }
   }
 }
