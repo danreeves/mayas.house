@@ -28,10 +28,22 @@ body {
   width: 100%;
   height: 100%;
   cursor: pointer;
-  /* The backing store is the viewport divided by VIEW_ZOOM; the browser does the
-     magnifying, and nearest-neighbour keeps the pixel art crisp. */
+  /* The backing store is the viewport divided by VIEW_ZOOM and the page pins the CSS
+     size to an exact whole multiple of it, so every world pixel covers a whole square
+     of screen pixels. Nearest-neighbour keeps the pixel art crisp. */
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+}
+
+/* Name tags and chat balloons, drawn at the page's own pixel size so the glyphs stay
+   sharp. It rides on top of the world canvas and ignores the pointer. */
+.ms-canvas-overlay {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .ms-pixelated {

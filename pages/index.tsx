@@ -25,12 +25,19 @@ import {
   stepPhysics,
 } from '../src/engine/physics';
 import {
-  ALL_LAYERS_VISIBLE,
+  backLayerKey,
+  type MapArtData,
+  GROUND_EXTENSION_KEY,
+  isLayerVisible,
+  mapLayerKey,
+  NPC_LAYER_KEY,
+  PLAYERS_LAYER_KEY,
+  PORTALS_LAYER_KEY,
   type ActiveChatBubble,
   preloadMapAssets,
-  type RenderLayerKey,
   type RenderLayerVisibility,
   renderScene,
+  setMapArt,
   VIEW_ZOOM,
   WORLD_VERTICAL_BIAS,
 } from '../src/engine/renderer';
@@ -113,20 +120,40 @@ function isLocalDevHost(): boolean {
   );
 }
 
-// Human-readable names for the local-only render layer panel, in draw order.
-const LAYER_LABELS: Array<{ key: RenderLayerKey; label: string }> = [
-  { key: 'sky', label: 'Sky' },
-  { key: 'clouds', label: 'Clouds' },
-  { key: 'hills', label: 'Hills' },
-  { key: 'tree', label: 'Tree' },
-  { key: 'backObjs', label: 'Bush + fence' },
-  { key: 'house', label: 'House + ground' },
-  { key: 'groundFlanks', label: 'Ground flanks' },
-  { key: 'frontObjs', label: 'Front objects' },
-  { key: 'portals', label: 'Portals' },
-  { key: 'npc', label: 'Maya (NPC)' },
-  { key: 'players', label: 'Players' },
-];
+// The map artwork the renderer composes from. Harvested per client version by
+// scripts/harvest-map.mjs; ?mapArt=<name> picks a different file so the same page can
+// render another version of the map without a rebuild.
+const DEFAULT_MAP_ART = 'GMS-93-100000001';
+
+function mapArtUrl(): string {
+  if (typeof location === 'undefined') return `/map-data/${DEFAULT_MAP_ART}.json`;
+  const override = new URLSearchParams(location.search).get('mapArt');
+  const name = override && /^[A-Za-z0-9._-]+$/.test(override) ? override : DEFAULT_MAP_ART;
+  return `/map-data/${name}.json`;
+}
+
+function layerPanelRows(art: MapArtData | null): Array<{ key: string; label: string }> {
+  if (!art) return [];
+  const rows: Array<{ key: string; label: string }> = [];
+  art.back.forEach((entry, index) => {
+    rows.push({
+      key: backLayerKey(index),
+      label: `Back ${index} · ${entry.bS}/${entry.no}${entry.front !== 0 ? ' (front)' : ''}`,
+    });
+  });
+  for (const layer of art.layers) {
+    if (layer.obj.length === 0 && layer.tiles.length === 0) continue;
+    rows.push({
+      key: mapLayerKey(layer.index),
+      label: `Layer ${layer.index} · ${layer.obj.length} obj, ${layer.tiles.length} tiles`,
+    });
+  }
+  rows.push({ key: GROUND_EXTENSION_KEY, label: 'Ground extension' });
+  rows.push({ key: PORTALS_LAYER_KEY, label: 'Portals' });
+  rows.push({ key: NPC_LAYER_KEY, label: 'Maya (NPC)' });
+  rows.push({ key: PLAYERS_LAYER_KEY, label: 'Players' });
+  return rows;
+}
 
 function loadSavedCharacter(): MapleSimCharacter {
   try {
@@ -211,10 +238,10 @@ export default function MayasHousePage() {
   const [charModalOpen, setCharModalOpen] = createSignal(false);
   const [showControls, setShowControls] = createSignal(false);
   const [showFootholds, setShowFootholds] = createSignal(false);
-  const [layers, setLayers] = createSignal<RenderLayerVisibility>({
-    ...ALL_LAYERS_VISIBLE,
-  });
+  const [mapArtData, setMapArtData] = createSignal<MapArtData | null>(null);
+  const [layers, setLayers] = createSignal<RenderLayerVisibility>({});
   const [showLayerPanel, setShowLayerPanel] = createSignal(false);
+  const layerRows = createMemo(() => layerPanelRows(mapArtData()));
   const [bgmEnabled, setBgmEnabled] = createSignal(false);
   const [activeEmotion, setActiveEmotion] =
     createSignal<CharacterEmotion>('default');
@@ -227,6 +254,7 @@ export default function MayasHousePage() {
   const [reportedIds, setReportedIds] = createSignal<Set<string>>(new Set());
 
   let canvasRef: HTMLCanvasElement | undefined;
+  let overlayRef: HTMLCanvasElement | undefined;
   let chatInputRef: HTMLInputElement | undefined;
   let chatHistoryRef: HTMLDivElement | undefined;
   let bgmAudioRef: HTMLAudioElement | undefined;
@@ -293,13 +321,40 @@ export default function MayasHousePage() {
   let fadeToBlack = false;
   let channelSwitchTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // The map render is 1135x827 in world space while the view is now wider than the
-  // map, so the camera is kept where the map still covers the whole viewport; past
-  // that the stone wall would end in mid-air.
-  const cameraTargetFor = (x: number, y: number) => ({
-    x: Math.max(-110, Math.min(290, x)),
-    y: Math.max(20, Math.min(165, y - 75)),
-  });
+  // Vertical framing. SCENE_TOP_Y and GROUND_LINE_Y are the world y of the top of the
+  // house's roof and of the grass the player walks on: the two things the view has to
+  // keep framed. The camera follows the player so their feet sit at FEET_SCREEN_FRACTION
+  // of the view, and is clamped so the roof never rises off the top of the screen nor the
+  // ground off the bottom. On a 631-pixel-tall view that works out at a little sky above
+  // the roof, the house filling the middle and the stone wall along the bottom.
+  //
+  // Expressing the framing as fractions of the view height rather than fixed world-space
+  // clamps keeps it the same whatever size the window is, and the camera still leans with
+  // the player inside that band, which is what makes jumps and ladders read.
+  const SCENE_TOP_Y = -266;
+  const GROUND_LINE_Y = 268;
+  const FEET_SCREEN_FRACTION = 0.9;
+  // The x clamp keeps the map covering the middle of the screen; past its edges the ground
+  // rows continue mirrored.
+  const cameraTargetFor = (x: number, y: number) => {
+    const viewHeight = Math.max(1, window.innerHeight / VIEW_ZOOM);
+    const halfView = viewHeight / 2;
+    return {
+      x: Math.max(-110, Math.min(290, x)),
+      y: Math.max(
+        // Keep the ground line on screen...
+        GROUND_LINE_Y - halfView + WORLD_VERTICAL_BIAS,
+        Math.min(
+          // ...and the roof too.
+          SCENE_TOP_Y + halfView + WORLD_VERTICAL_BIAS,
+          y -
+            Math.round(
+              FEET_SCREEN_FRACTION * viewHeight - halfView - WORLD_VERTICAL_BIAS,
+            ),
+        ),
+      ),
+    };
+  };
 
   const trackRemoteSample = (
     id: string,
@@ -844,7 +899,19 @@ export default function MayasHousePage() {
   };
 
   onMount(() => {
-    preloadMapAssets();
+    // The map artwork drives everything the renderer draws, so the placeholder is
+    // replaced as soon as the harvest lands and its sprites are warmed.
+    fetch(mapArtUrl())
+      .then((res) => (res.ok ? (res.json() as Promise<MapArtData>) : null))
+      .then((art) => {
+        if (!art || !Array.isArray(art.layers)) return;
+        setMapArt(art);
+        setMapArtData(art);
+        preloadMapAssets();
+      })
+      .catch(() => {
+        // The renderer falls back to a flat placeholder if the harvest is missing.
+      });
 
     const clientId = loadClientId();
     setSelfId(clientId);
@@ -1092,6 +1159,26 @@ export default function MayasHousePage() {
           canvasRef.width = renderWidth;
           canvasRef.height = renderHeight;
         }
+        // Pin the CSS size to an exact whole multiple of the backing store. Leaving it at
+        // `width: 100%` would give a 1.999x magnification on an odd viewport width, which
+        // is exactly the fractional scaling the whole-pixel rule is there to avoid.
+        const cssWidth = `${renderWidth * VIEW_ZOOM}px`;
+        const cssHeight = `${renderHeight * VIEW_ZOOM}px`;
+        if (canvasRef.style.width !== cssWidth) canvasRef.style.width = cssWidth;
+        if (canvasRef.style.height !== cssHeight) canvasRef.style.height = cssHeight;
+        // Name tags and chat balloons go on a second canvas that sits on top of this
+        // one at the page's real resolution, so glyphs are rasterised at the size they
+        // are read at instead of being magnified with the artwork.
+        const overlay = overlayRef?.getContext('2d') ?? null;
+        if (overlayRef && overlay) {
+          const dpr = window.devicePixelRatio || 1;
+          const overlayWidth = Math.max(1, Math.round(window.innerWidth * dpr));
+          const overlayHeight = Math.max(1, Math.round(window.innerHeight * dpr));
+          if (overlayRef.width !== overlayWidth || overlayRef.height !== overlayHeight) {
+            overlayRef.width = overlayWidth;
+            overlayRef.height = overlayHeight;
+          }
+        }
         const ctx = canvasRef.getContext('2d');
         if (ctx) {
           const curChar = character();
@@ -1129,12 +1216,20 @@ export default function MayasHousePage() {
                 (inputState.up || inputState.down),
             },
             nowWall,
+            overlay,
           );
 
-          // Channel-change black-out, drawn over everything else
+          // Channel-change black-out, drawn over everything else. It goes on the
+          // overlay when there is one, so it covers the name tags too.
           if (fadeAlpha > 0.001) {
-            ctx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha.toFixed(3)})`;
-            ctx.fillRect(0, 0, canvasRef.width, canvasRef.height);
+            const fadeCtx = overlay ?? ctx;
+            const fadeW = fadeCtx === overlay ? overlayRef!.width : canvasRef.width;
+            const fadeH = fadeCtx === overlay ? overlayRef!.height : canvasRef.height;
+            fadeCtx.save();
+            fadeCtx.setTransform(1, 0, 0, 1, 0, 0);
+            fadeCtx.fillStyle = `rgba(0, 0, 0, ${fadeAlpha.toFixed(3)})`;
+            fadeCtx.fillRect(0, 0, fadeW, fadeH);
+            fadeCtx.restore();
           }
         }
       }
@@ -1271,6 +1366,8 @@ export default function MayasHousePage() {
           };
         }}
       />
+
+      <canvas ref={overlayRef} class="ms-canvas-overlay" />
 
       <audio
         ref={bgmAudioRef}
@@ -1457,28 +1554,33 @@ export default function MayasHousePage() {
               <button
                 type="button"
                 class="ms-btn ms-btn-mini"
-                onClick={() => setLayers({ ...ALL_LAYERS_VISIBLE })}
+                onClick={() => setLayers({})}
               >
                 Reset
               </button>
             </div>
-            <For each={LAYER_LABELS}>
-              {(entry) => (
-                <label class="ms-layer-row">
-                  <input
-                    type="checkbox"
-                    checked={layers()[entry.key]}
-                    onChange={(e) =>
-                      setLayers((prev) => ({
-                        ...prev,
-                        [entry.key]: e.currentTarget.checked,
-                      }))
-                    }
-                  />
-                  <span>{entry.label}</span>
-                </label>
-              )}
-            </For>
+            <Show
+              when={layerRows().length > 0}
+              fallback={<div class="ms-layer-empty">Loading map artwork…</div>}
+            >
+              <For each={layerRows()}>
+                {(entry) => (
+                  <label class="ms-layer-row">
+                    <input
+                      type="checkbox"
+                      checked={isLayerVisible(layers(), entry.key)}
+                      onChange={(e) =>
+                        setLayers((prev) => ({
+                          ...prev,
+                          [entry.key]: e.currentTarget.checked,
+                        }))
+                      }
+                    />
+                    <span>{entry.label}</span>
+                  </label>
+                )}
+              </For>
+            </Show>
           </div>
         </Show>
       </div>
