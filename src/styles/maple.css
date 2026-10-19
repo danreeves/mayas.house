@@ -243,6 +243,45 @@ body {
   font-weight: 700;
 }
 
+/* Local-only render layer panel */
+.ms-layer-panel {
+  padding: 8px 11px;
+  font-size: 11px;
+  line-height: 1.6;
+  min-width: 168px;
+}
+
+.ms-layer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+  font-weight: 700;
+  color: #ffea8a;
+}
+
+.ms-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ms-layer-row input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #ffcc44;
+  cursor: pointer;
+}
+
+.ms-btn-mini {
+  padding: 1px 7px;
+  font-size: 10px;
+}
+
 /* Bottom HUD Bar (Chat + Emotes + Character Actions) */
 .ms-bottom-hud {
   position: absolute;

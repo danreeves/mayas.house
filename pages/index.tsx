@@ -25,8 +25,11 @@ import {
   stepPhysics,
 } from '../src/engine/physics';
 import {
+  ALL_LAYERS_VISIBLE,
   type ActiveChatBubble,
   preloadMapAssets,
+  type RenderLayerKey,
+  type RenderLayerVisibility,
   renderScene,
   VIEW_ZOOM,
   WORLD_VERTICAL_BIAS,
@@ -109,6 +112,21 @@ function isLocalDevHost(): boolean {
     host.endsWith('.localhost')
   );
 }
+
+// Human-readable names for the local-only render layer panel, in draw order.
+const LAYER_LABELS: Array<{ key: RenderLayerKey; label: string }> = [
+  { key: 'sky', label: 'Sky' },
+  { key: 'clouds', label: 'Clouds' },
+  { key: 'hills', label: 'Hills' },
+  { key: 'tree', label: 'Tree' },
+  { key: 'backObjs', label: 'Bush + fence' },
+  { key: 'house', label: 'House + ground' },
+  { key: 'groundFlanks', label: 'Ground flanks' },
+  { key: 'frontObjs', label: 'Front objects' },
+  { key: 'portals', label: 'Portals' },
+  { key: 'npc', label: 'Maya (NPC)' },
+  { key: 'players', label: 'Players' },
+];
 
 function loadSavedCharacter(): MapleSimCharacter {
   try {
@@ -193,6 +211,10 @@ export default function MayasHousePage() {
   const [charModalOpen, setCharModalOpen] = createSignal(false);
   const [showControls, setShowControls] = createSignal(false);
   const [showFootholds, setShowFootholds] = createSignal(false);
+  const [layers, setLayers] = createSignal<RenderLayerVisibility>({
+    ...ALL_LAYERS_VISIBLE,
+  });
+  const [showLayerPanel, setShowLayerPanel] = createSignal(false);
   const [bgmEnabled, setBgmEnabled] = createSignal(false);
   const [activeEmotion, setActiveEmotion] =
     createSignal<CharacterEmotion>('default');
@@ -1099,6 +1121,7 @@ export default function MayasHousePage() {
               chatBubbles,
               npcBubble,
               showFootholds: showFootholds(),
+              layers: layers(),
               cameraX,
               cameraY,
               isMovingOnLadder:
@@ -1373,6 +1396,13 @@ export default function MayasHousePage() {
             >
               {showFootholds() ? '📐 Footholds: On' : '📐 Footholds'}
             </button>
+            <button
+              type="button"
+              class="ms-btn"
+              onClick={() => setShowLayerPanel((v) => !v)}
+            >
+              {showLayerPanel() ? '🗂️ Layers: Open' : '🗂️ Layers'}
+            </button>
           </Show>
           <button
             type="button"
@@ -1417,6 +1447,38 @@ export default function MayasHousePage() {
               <span>Chat</span>
               <span class="ms-key">Enter</span>
             </div>
+          </div>
+        </Show>
+
+        <Show when={showLayerPanel()}>
+          <div class="ms-window ms-layer-panel">
+            <div class="ms-layer-head">
+              <span>Render layers</span>
+              <button
+                type="button"
+                class="ms-btn ms-btn-mini"
+                onClick={() => setLayers({ ...ALL_LAYERS_VISIBLE })}
+              >
+                Reset
+              </button>
+            </div>
+            <For each={LAYER_LABELS}>
+              {(entry) => (
+                <label class="ms-layer-row">
+                  <input
+                    type="checkbox"
+                    checked={layers()[entry.key]}
+                    onChange={(e) =>
+                      setLayers((prev) => ({
+                        ...prev,
+                        [entry.key]: e.currentTarget.checked,
+                      }))
+                    }
+                  />
+                  <span>{entry.label}</span>
+                </label>
+              )}
+            </For>
           </div>
         </Show>
       </div>

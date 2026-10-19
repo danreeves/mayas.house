@@ -34,6 +34,37 @@ export interface ActiveChatBubble {
   expiresAt: number;
 }
 
+// Individually switchable parts of the composition, used by the local-only layer
+// panel to isolate a single piece of scenery while tuning it.
+export type RenderLayerKey =
+  | 'sky'
+  | 'clouds'
+  | 'hills'
+  | 'tree'
+  | 'backObjs'
+  | 'house'
+  | 'groundFlanks'
+  | 'frontObjs'
+  | 'portals'
+  | 'npc'
+  | 'players';
+
+export type RenderLayerVisibility = Record<RenderLayerKey, boolean>;
+
+export const ALL_LAYERS_VISIBLE: RenderLayerVisibility = {
+  sky: true,
+  clouds: true,
+  hills: true,
+  tree: true,
+  backObjs: true,
+  house: true,
+  groundFlanks: true,
+  frontObjs: true,
+  portals: true,
+  npc: true,
+  players: true,
+};
+
 export interface RenderSceneState {
   mapData: MapleMapData | null;
   selfPlayer: PlayerState;
@@ -41,12 +72,14 @@ export interface RenderSceneState {
   chatBubbles: Map<string, ActiveChatBubble>;
   npcBubble: ActiveChatBubble | null;
   showFootholds: boolean;
+  layers: RenderLayerVisibility;
   cameraX: number;
   cameraY: number;
   isMovingOnLadder: boolean;
 }
 
 const MAP_RENDER_URL = '/api/maple/GMS/93/map/100000001/render';
+const MAP_OBJ_URL_PREFIX = '/api/maple/wz/img/GMS/93/Map/Obj/';
 const BG_SKY_URL = '/api/maple/wz/img/GMS/93/Map/Back/grassySoil.img/back/0';
 const BG_CLOUDS_URL = '/api/maple/wz/img/GMS/93/Map/Back/grassySoil.img/back/1';
 const BG_HILLS_URL = '/api/maple/wz/img/GMS/93/Map/Back/grassySoil.img/back/2';
@@ -70,6 +103,7 @@ type ChatBalloonPart = (typeof CHAT_BALLOON_PARTS)[number];
 // x/y are the sprite origins in map coordinates and rx/ry the parallax percentages.
 // Types: 0 draw once, 1 tile across, 2 tile down, 3 tile both, 4 tile across.
 interface BackLayer {
+  key: RenderLayerKey;
   url: string;
   x: number;
   y: number;
@@ -84,6 +118,7 @@ interface BackLayer {
 const BACK_LAYERS: BackLayer[] = [
   // Clouds: origin is the middle of the sprite, tiled across the sky.
   {
+    key: 'clouds',
     url: BG_CLOUDS_URL,
     x: 112,
     y: 10,
@@ -97,6 +132,7 @@ const BACK_LAYERS: BackLayer[] = [
   // client hides behind the house; it is drawn once (type 0) rather than tiled so
   // that half a tree never wanders into open ground.
   {
+    key: 'hills',
     url: BG_HILLS_URL,
     x: 324,
     y: 163,
@@ -107,13 +143,13 @@ const BACK_LAYERS: BackLayer[] = [
     type: 0,
     underFill: '#7da442',
   },
-  // The tree that stands to the right of the house. The map data records the origin
-  // at y -141, which would leave it floating above the hills; the client draws it
-  // with its base on the ground.
+  // The tree that stands to the right of the house, using the map's own origin
+  // (203, -141) so it plants on the hillside the way the client shows it.
   {
+    key: 'tree',
     url: BG_TREES_URL,
     x: 203,
-    y: 141,
+    y: -141,
     originX: 157,
     originY: 134,
     rx: -20,
@@ -126,6 +162,114 @@ function getBalloonPartUrl(part: ChatBalloonPart): string {
   return `/api/maple/wz/img/GMS/93/UI/ChatBalloon.img/0/${part}`;
 }
 
+// The map's own obj layers, read straight from
+// Map/Map/Map1/100000001.img/<layer>/obj/<n> in the WZ data. maplestory.io's baked
+// map render only covers layer 1 (the house and its ground tiles), so layer 0 — the
+// rope fence, its end post and the outer bush — and layer 2 — the two artificiality
+// ropes — are missing from it and drawn here instead. x/y is the map position of the
+// sprite's origin, which is what the client anchors the image by.
+interface MapObjSprite {
+  oS: string;
+  l0: string;
+  l1: string;
+  l2: string;
+  x: number;
+  y: number;
+  originX: number;
+  originY: number;
+  flipX: boolean;
+}
+
+function mapObjUrl(obj: MapObjSprite): string {
+  return `${MAP_OBJ_URL_PREFIX}${obj.oS}.img/${obj.l0}/${obj.l1}/${obj.l2}/0`;
+}
+
+// Layer 0, drawn behind the house: one bush at the left edge and the five fence
+// pieces along the walkway to the right (market/22 four times, then the end post
+// market/21).
+const MAP_OBJ_LAYER_0: MapObjSprite[] = [
+  {
+    oS: 'acc1',
+    l0: 'grassySoil',
+    l1: 'nature',
+    l2: '13',
+    x: -368,
+    y: 227,
+    originX: 111,
+    originY: 60,
+    flipX: false,
+  },
+  ...[292, 384, 476, 568].map((x) => ({
+    oS: 'acc1',
+    l0: 'grassySoil',
+    l1: 'market',
+    l2: '22',
+    x,
+    y: 245,
+    originX: 46,
+    originY: 30,
+    flipX: false,
+  })),
+  {
+    oS: 'acc1',
+    l0: 'grassySoil',
+    l1: 'market',
+    l2: '21',
+    x: 633,
+    y: 245,
+    originX: 22,
+    originY: 29,
+    flipX: false,
+  },
+];
+
+// Layer 2, drawn in front of the house: the two decorative ropes on its left side.
+const MAP_OBJ_LAYER_2: MapObjSprite[] = [
+  {
+    oS: 'acc1',
+    l0: 'woodMarble',
+    l1: 'artificiality',
+    l2: '1',
+    x: -235,
+    y: 362,
+    originX: 28,
+    originY: 28,
+    flipX: false,
+  },
+  {
+    oS: 'acc1',
+    l0: 'woodMarble',
+    l1: 'artificiality',
+    l2: '2',
+    x: -235,
+    y: 415,
+    originX: 14,
+    originY: 47,
+    flipX: false,
+  },
+];
+
+function drawMapObjLayer(
+  ctx: CanvasRenderingContext2D,
+  objects: MapObjSprite[],
+): void {
+  for (const obj of objects) {
+    const cached = loadCachedImage(mapObjUrl(obj));
+    if (!cached.loaded || cached.img.width === 0) continue;
+    const x = obj.x - obj.originX;
+    const y = obj.y - obj.originY;
+    if (obj.flipX) {
+      ctx.save();
+      ctx.translate(x + cached.img.width, y);
+      ctx.scale(-1, 1);
+      ctx.drawImage(cached.img, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.drawImage(cached.img, x, y);
+    }
+  }
+}
+
 export function preloadMapAssets(): void {
   loadCachedImage(MAP_RENDER_URL);
   loadCachedImage(BG_SKY_URL);
@@ -133,6 +277,12 @@ export function preloadMapAssets(): void {
   loadCachedImage(BG_HILLS_URL);
   loadCachedImage(BG_TREES_URL);
   loadCachedImage(NPC_MAYA_URL);
+  for (const obj of MAP_OBJ_LAYER_0) {
+    loadCachedImage(mapObjUrl(obj));
+  }
+  for (const obj of MAP_OBJ_LAYER_2) {
+    loadCachedImage(mapObjUrl(obj));
+  }
   for (const url of PORTAL_FRAME_URLS) {
     loadCachedImage(url);
   }
@@ -151,8 +301,10 @@ export function renderScene(
   ctx.save();
   ctx.imageSmoothingEnabled = false;
 
+  const layers = state.layers;
+
   // 1. Draw Henesys Sky & Parallax Backgrounds
-  drawHenesysBackground(ctx, width, height, state.cameraX, state.cameraY);
+  drawHenesysBackground(ctx, width, height, state.cameraX, state.cameraY, layers);
 
   // Convert world coordinates to canvas coordinates. The camera point is pinned to
   // the canvas centre shifted down by the vertical bias. This is a 1:1 mapping: the
@@ -164,25 +316,37 @@ export function renderScene(
     Math.round(height / 2 + WORLD_VERTICAL_BIAS - state.cameraY),
   );
 
-  // 2. Draw Maya's House Map Render
+  // 2. Draw the map's own obj layer 0 (bush and rope fence), which sits behind the
+  // house, then the baked layer 1 render on top of it.
+  if (layers.backObjs) {
+    drawMapObjLayer(ctx, MAP_OBJ_LAYER_0);
+  }
+
   const mapImg = loadCachedImage(MAP_RENDER_URL);
-  if (mapImg.loaded) {
+  if (layers.house && mapImg.loaded) {
     ctx.drawImage(mapImg.img, MAP_RENDER_ORIGIN_X, MAP_RENDER_ORIGIN_Y);
     // The view can be wider than the map, so continue the stone platform outwards.
-    drawGroundFlanks(
-      ctx,
-      mapImg.img,
-      state.cameraX - width / 2 - 2,
-      state.cameraX + width / 2 + 2,
-    );
-  } else {
+    if (layers.groundFlanks) {
+      drawGroundFlanks(
+        ctx,
+        mapImg.img,
+        state.cameraX - width / 2 - 2,
+        state.cameraX + width / 2 + 2,
+      );
+    }
+  } else if (layers.house) {
     // Loading placeholder for floor
     ctx.fillStyle = '#5c8a32';
     ctx.fillRect(-450, 274, 1080, 40);
   }
 
+  // 2b. Layer 2 sits in front of the house.
+  if (layers.frontObjs) {
+    drawMapObjLayer(ctx, MAP_OBJ_LAYER_2);
+  }
+
   // 3. Draw visible portals only (type !== 0; type 0 'sp' is an invisible spawn point)
-  if (state.mapData?.portals) {
+  if (layers.portals && state.mapData?.portals) {
     const portalFrameIdx = Math.floor(nowMs / 120) % PORTAL_FRAME_URLS.length;
     const portalImg = loadCachedImage(PORTAL_FRAME_URLS[portalFrameIdx]);
     if (portalImg.loaded) {
@@ -200,7 +364,7 @@ export function renderScene(
 
   // 4. Draw NPC Maya at (-17, 39)
   const mayaImg = loadCachedImage(NPC_MAYA_URL);
-  if (mayaImg.loaded) {
+  if (layers.npc && mayaImg.loaded) {
     const mx = -17 - Math.round(mayaImg.img.width / 2);
     const my = 39 - mayaImg.img.height;
     ctx.drawImage(mayaImg.img, mx, my);
@@ -231,21 +395,23 @@ export function renderScene(
   }
 
   // 6. Draw Remote Players + Self Player (Self on top)
-  const allPlayers: Array<{ player: PlayerState; isSelf: boolean }> = [];
-  for (const remote of state.remotePlayers.values()) {
-    allPlayers.push({ player: remote, isSelf: false });
-  }
-  allPlayers.push({ player: state.selfPlayer, isSelf: true });
+  if (layers.players) {
+    const allPlayers: Array<{ player: PlayerState; isSelf: boolean }> = [];
+    for (const remote of state.remotePlayers.values()) {
+      allPlayers.push({ player: remote, isSelf: false });
+    }
+    allPlayers.push({ player: state.selfPlayer, isSelf: true });
 
-  for (const { player, isSelf } of allPlayers) {
-    drawPlayer(
-      ctx,
-      player,
-      isSelf,
-      isSelf ? state.isMovingOnLadder : Math.abs(player.vy) > 1,
-      state.chatBubbles.get(player.id),
-      nowMs,
-    );
+    for (const { player, isSelf } of allPlayers) {
+      drawPlayer(
+        ctx,
+        player,
+        isSelf,
+        isSelf ? state.isMovingOnLadder : Math.abs(player.vy) > 1,
+        state.chatBubbles.get(player.id),
+        nowMs,
+      );
+    }
   }
 
   ctx.restore();
@@ -299,16 +465,25 @@ function drawHenesysBackground(
   height: number,
   cameraX: number,
   cameraY: number,
+  layers: RenderLayerVisibility,
 ): void {
   // Base sky gradient matching Henesys grassySoil
-  const grad = ctx.createLinearGradient(0, 0, 0, height);
-  grad.addColorStop(0, '#5ea9e6');
-  grad.addColorStop(0.55, '#a8dbf8');
-  grad.addColorStop(1, '#d7f0fc');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, height);
+  if (layers.sky) {
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0, '#5ea9e6');
+    grad.addColorStop(0.55, '#a8dbf8');
+    grad.addColorStop(1, '#d7f0fc');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    // Keep the canvas opaque even with the sky switched off so the panel behind it
+    // does not show through the world.
+    ctx.fillStyle = '#101820';
+    ctx.fillRect(0, 0, width, height);
+  }
 
   for (const layer of BACK_LAYERS) {
+    if (!layers[layer.key]) continue;
     const cached = loadCachedImage(layer.url);
     if (!cached.loaded || cached.img.width === 0) continue;
 
