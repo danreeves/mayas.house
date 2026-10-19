@@ -11,9 +11,15 @@ body {
   height: 100%;
   overflow: hidden;
   background: #0d1522;
-  font-family: Tahoma, Verdana, 'Segoe UI', sans-serif;
+  font-family: Arial, Helvetica, sans-serif;
   font-size: 12px;
   color: #f4f7fb;
+  /* Ask the platform for unantialiased glyphs. WebKit on macOS honours `none`; Windows
+     Chromium has no CSS switch for ClearType, so canvas text is thresholded by hand
+     instead (see fillCrispText in the renderer). */
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+  text-rendering: optimizeSpeed;
 }
 
 .ms-app {

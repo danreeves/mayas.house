@@ -706,6 +706,136 @@ function drawPlayer(
   }
 }
 
+// --- Hard-edged glyphs ---------------------------------------------------------------
+//
+// `fillText` always antialiases, and a 2D context has no switch to turn that off (the CSS
+// font smoothing properties only reach DOM text). So glyphs are rasterised once into a
+// small offscreen canvas, their coverage is thresholded to fully opaque or fully
+// transparent pixels, and the result is blitted at the caller's anchor. That gives the
+// balloons and name tags the hard bitmap look of the game's own text rather than softened
+// type, and nothing is resampled on the way to the screen.
+
+type CrispTextSprite = {
+  canvas: HTMLCanvasElement;
+  anchorX: number;
+  anchorY: number;
+};
+
+const CRISP_TEXT_CACHE_LIMIT = 256;
+const crispTextCache = new Map<string, CrispTextSprite>();
+let crispMeasureCanvas: HTMLCanvasElement | null = null;
+
+function crispMeasureContext(): CanvasRenderingContext2D | null {
+  if (!crispMeasureCanvas) crispMeasureCanvas = document.createElement('canvas');
+  return crispMeasureCanvas.getContext('2d');
+}
+
+function crispTextSprite(
+  font: string,
+  color: string,
+  text: string,
+  scale: number,
+  align: CanvasTextAlign,
+  baseline: CanvasTextBaseline,
+): CrispTextSprite | null {
+  const key = `${font}|${color}|${text}|${scale.toFixed(4)}|${align}|${baseline}`;
+  const cached = crispTextCache.get(key);
+  if (cached) return cached;
+
+  const parsed = /^(\d+(?:\.\d+)?)px\s*(.*)$/.exec(font);
+  if (!parsed) return null;
+  // Glyphs are rasterised at the size they are actually displayed at, so the threshold
+  // works on real device pixels instead of on a magnified approximation.
+  const deviceFont = `${Math.max(1, Math.round(parseFloat(parsed[1]) * scale))}px ${parsed[2]}`;
+
+  const measure = crispMeasureContext();
+  if (!measure) return null;
+  measure.font = deviceFont;
+  const metrics = measure.measureText(text);
+  const ascent = metrics.fontBoundingBoxAscent ?? metrics.actualBoundingBoxAscent;
+  const descent = metrics.fontBoundingBoxDescent ?? metrics.actualBoundingBoxDescent;
+  const pad = 2;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(metrics.width) + pad * 2);
+  canvas.height = Math.max(1, Math.ceil(ascent + descent) + pad * 2);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  ctx.font = deviceFont;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, pad, pad + ascent);
+
+  // Any pixel the rasteriser partly covered becomes fully opaque, everything else
+  // vanishes: hard edges, no smoothing.
+  const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = image.data;
+  for (let i = 3; i < data.length; i += 4) {
+    data[i] = data[i] >= 128 ? 255 : 0;
+  }
+  ctx.putImageData(image, 0, 0);
+
+  const sprite: CrispTextSprite = {
+    canvas,
+    anchorX:
+      pad +
+      (align === 'center'
+        ? metrics.width / 2
+        : align === 'right' || align === 'end'
+          ? metrics.width
+          : 0),
+    anchorY:
+      pad +
+      (baseline === 'middle'
+        ? (ascent + descent) / 2
+        : baseline === 'top' || baseline === 'hanging'
+          ? 0
+          : ascent),
+  };
+
+  if (crispTextCache.size >= CRISP_TEXT_CACHE_LIMIT) crispTextCache.clear();
+  crispTextCache.set(key, sprite);
+  return sprite;
+}
+
+/**
+ * Draws text without antialiasing, anchored exactly like `fillText` would (honouring the
+ * context's current font, fill colour, textAlign, textBaseline and transform).
+ */
+function fillCrispText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+): void {
+  const fill = ctx.fillStyle;
+  const transform = ctx.getTransform();
+  const scale = Math.abs(transform.a) || 1;
+  const sprite =
+    typeof fill === 'string' && text
+      ? crispTextSprite(ctx.font, fill, text, scale, ctx.textAlign, ctx.textBaseline)
+      : null;
+
+  if (!sprite) {
+    ctx.fillText(text, x, y);
+    return;
+  }
+
+  const deviceX = transform.a * x + transform.c * y + transform.e;
+  const deviceY = transform.b * x + transform.d * y + transform.f;
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(
+    sprite.canvas,
+    Math.round(deviceX - sprite.anchorX),
+    Math.round(deviceY - sprite.anchorY),
+  );
+  ctx.restore();
+}
+
 function drawMapleNameTag(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -715,7 +845,7 @@ function drawMapleNameTag(
   bgColor: string,
 ): void {
   ctx.save();
-  ctx.font = '12px Tahoma, Verdana, sans-serif';
+  ctx.font = '12px Arial, Helvetica, sans-serif';
   const metrics = ctx.measureText(name);
   const padX = 7;
   const tagWidth = Math.ceil(metrics.width) + padX * 2;
@@ -735,7 +865,7 @@ function drawMapleNameTag(
   ctx.fillStyle = textColor;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(name, x, tagY + tagHeight / 2 + 0.5);
+  fillCrispText(ctx, name, x, tagY + tagHeight / 2 + 0.5);
   ctx.restore();
 }
 
@@ -749,7 +879,7 @@ function drawSpeechBubble(
   _isNpc: boolean,
 ): void {
   ctx.save();
-  ctx.font = '11px Tahoma, Arial, sans-serif';
+  ctx.font = '11px Arial, Helvetica, sans-serif';
 
   // Classic MapleStory chat balloon uses 7 horizontal 12px columns (84px inner, 96px total width)
   const COLS = 7;
@@ -845,7 +975,7 @@ function drawSpeechBubble(
   const centerX = boxX + Math.floor(boxWidth / 2);
   for (let i = 0; i < lines.length; i++) {
     const lineCenterY = boxY + BORDER_H + i * ROW_H + Math.floor(ROW_H / 2);
-    textCtx.fillText(lines[i], centerX, lineCenterY);
+    fillCrispText(textCtx, lines[i], centerX, lineCenterY);
   }
   ctx.restore();
 }
