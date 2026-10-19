@@ -7,16 +7,27 @@ export const MAP_RENDER_ORIGIN_Y = -265;
 export const MAP_RENDER_WIDTH = 1135;
 export const MAP_RENDER_HEIGHT = 827;
 
-// The world layer (map, portals, NPC, players) is drawn at this zoom so the house
-// fills the frame the way the game client frames it, with the camera point sitting
-// at the screen centre shifted down by WORLD_VERTICAL_BIAS screen pixels. The
-// parallax backdrop is scaled by the same factor so it stays behind the map.
+// The stone platform inside that render, in map-render pixels: the grass line starts
+// at y 533 and the wall runs from x 29 to x 1108 down to y 826. The slices used to
+// extend it sideways stop short of the house so no scenery gets mirrored outwards.
+const GROUND_BAND_TOP = 533;
+const GROUND_BAND_HEIGHT = 294;
+const GROUND_SLICE_LEFT = 29;
+const GROUND_SLICE_RIGHT = 1108;
+const GROUND_SLICE_WIDTH = 160;
+
+// How much bigger than "one world pixel per CSS pixel" the view should be.
 //
-// The zoom must stay a whole number: at a fractional scale the map's pixel art (and
-// the name tags and chat bubbles drawn in world space with it) lands between screen
-// pixels and shimmers.
-export const WORLD_ZOOM = 2;
-export const WORLD_VERTICAL_BIAS = 90;
+// The renderer itself always draws at 1:1 into the canvas. The page then sizes the
+// canvas to `viewport / VIEW_ZOOM` and lets CSS magnify it with nearest-neighbour
+// filtering, so the world is composed on whole source pixels and the browser scales
+// the finished bitmap. That keeps the artwork sharp at any zoom, including the
+// fractional 1.25 used here, where scaling the canvas context instead would leave
+// sprite edges and chat balloons landing between pixels.
+export const VIEW_ZOOM = 1.25;
+// Screen-space (canvas-pixel) shift that lowers the camera point below the middle of
+// the view, which frames the house the way the game client does.
+export const WORLD_VERTICAL_BIAS = 60;
 
 export interface ActiveChatBubble {
   text: string;
@@ -143,21 +154,27 @@ export function renderScene(
   // 1. Draw Henesys Sky & Parallax Backgrounds
   drawHenesysBackground(ctx, width, height, state.cameraX, state.cameraY);
 
-  // Convert world coordinates to screen coordinates. The camera point is pinned to
-  // the screen centre shifted down by the vertical bias, and the world is scaled by
-  // WORLD_ZOOM around that point. The translation is rounded in screen pixels so a
-  // whole-number zoom keeps world pixels on whole screen pixels.
+  // Convert world coordinates to canvas coordinates. The camera point is pinned to
+  // the canvas centre shifted down by the vertical bias. This is a 1:1 mapping: the
+  // magnification happens in CSS (see VIEW_ZOOM), so every draw here stays on whole
+  // canvas pixels.
   ctx.save();
   ctx.translate(
-    Math.round(width / 2 - state.cameraX * WORLD_ZOOM),
-    Math.round(height / 2 + WORLD_VERTICAL_BIAS - state.cameraY * WORLD_ZOOM),
+    Math.round(width / 2 - state.cameraX),
+    Math.round(height / 2 + WORLD_VERTICAL_BIAS - state.cameraY),
   );
-  ctx.scale(WORLD_ZOOM, WORLD_ZOOM);
 
   // 2. Draw Maya's House Map Render
   const mapImg = loadCachedImage(MAP_RENDER_URL);
   if (mapImg.loaded) {
     ctx.drawImage(mapImg.img, MAP_RENDER_ORIGIN_X, MAP_RENDER_ORIGIN_Y);
+    // The view can be wider than the map, so continue the stone platform outwards.
+    drawGroundFlanks(
+      ctx,
+      mapImg.img,
+      state.cameraX - width / 2 - 2,
+      state.cameraX + width / 2 + 2,
+    );
   } else {
     // Loading placeholder for floor
     ctx.fillStyle = '#5c8a32';
@@ -235,6 +252,47 @@ export function renderScene(
   ctx.restore();
 }
 
+// The map render stops at the map's own bounds. When the view is wider than the map
+// (any zoom below roughly 1.7 on a 1936px-wide window) the stone platform would end in
+// mid-air, so continue it outwards with mirrored slices of its own edge. Mirroring
+// about the edge keeps the join seamless instead of butting two copies together.
+function drawGroundFlanks(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  worldLeft: number,
+  worldRight: number,
+): void {
+  const top = MAP_RENDER_ORIGIN_Y + GROUND_BAND_TOP;
+  const mapLeft = MAP_RENDER_ORIGIN_X + GROUND_SLICE_LEFT;
+  const mapRight = MAP_RENDER_ORIGIN_X + GROUND_SLICE_RIGHT;
+
+  // Each copy is drawn flipped about its anchor x, touching the map's edge.
+  const copy = (anchorX: number, sourceX: number, destX: number) => {
+    ctx.save();
+    ctx.translate(anchorX, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(
+      img,
+      sourceX,
+      GROUND_BAND_TOP,
+      GROUND_SLICE_WIDTH,
+      GROUND_BAND_HEIGHT,
+      destX,
+      top,
+      GROUND_SLICE_WIDTH,
+      GROUND_BAND_HEIGHT,
+    );
+    ctx.restore();
+  };
+
+  for (let x = mapLeft; x > worldLeft; x -= GROUND_SLICE_WIDTH) {
+    copy(x, GROUND_SLICE_LEFT, 0);
+  }
+  for (let x = mapRight; x < worldRight; x += GROUND_SLICE_WIDTH) {
+    copy(x, GROUND_SLICE_RIGHT - GROUND_SLICE_WIDTH, -GROUND_SLICE_WIDTH);
+  }
+}
+
 function drawHenesysBackground(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -255,19 +313,18 @@ function drawHenesysBackground(
     if (!cached.loaded || cached.img.width === 0) continue;
 
     const img = cached.img;
-    const tw = img.width * WORLD_ZOOM;
-    const th = img.height * WORLD_ZOOM;
+    const tw = img.width;
+    const th = img.height;
 
     // rx/ry are the parallax percentages: the layer only shifts by that share of the
     // camera's travel, so distant scenery barely moves.
-    const originX =
-      width / 2 + (layer.x + (cameraX * layer.rx) / 100 - cameraX) * WORLD_ZOOM;
+    const originX = width / 2 + (layer.x + (cameraX * layer.rx) / 100 - cameraX);
     const originY =
       height / 2 +
       WORLD_VERTICAL_BIAS +
-      (layer.y + (cameraY * layer.ry) / 100 - cameraY) * WORLD_ZOOM;
-    const left = originX - layer.originX * WORLD_ZOOM;
-    const top = originY - layer.originY * WORLD_ZOOM;
+      (layer.y + (cameraY * layer.ry) / 100 - cameraY);
+    const left = originX - layer.originX;
+    const top = originY - layer.originY;
 
     if (layer.underFill) {
       ctx.fillStyle = layer.underFill;

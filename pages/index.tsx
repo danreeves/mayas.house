@@ -28,8 +28,8 @@ import {
   type ActiveChatBubble,
   preloadMapAssets,
   renderScene,
+  VIEW_ZOOM,
   WORLD_VERTICAL_BIAS,
-  WORLD_ZOOM,
 } from '../src/engine/renderer';
 import {
   EMOTE_PALETTE,
@@ -271,8 +271,11 @@ export default function MayasHousePage() {
   let fadeToBlack = false;
   let channelSwitchTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // The map render is 1135x827 in world space while the view is now wider than the
+  // map, so the camera is kept where the map still covers the whole viewport; past
+  // that the stone wall would end in mid-air.
   const cameraTargetFor = (x: number, y: number) => ({
-    x: Math.max(-180, Math.min(260, x)),
+    x: Math.max(-110, Math.min(290, x)),
     y: Math.max(20, Math.min(165, y - 75)),
   });
 
@@ -393,18 +396,22 @@ export default function MayasHousePage() {
     };
   };
 
-  // A canvas point (CSS pixels) to the player standing under it. The canvas draws
-  // the camera point at its centre (shifted down by the vertical bias) and scales the
-  // world by WORLD_ZOOM, so inverting that maps screen -> world.
+  // A pointer position to the player standing under it. The canvas is smaller than
+  // the element on screen (CSS magnifies it by VIEW_ZOOM), so the first step maps back
+  // into canvas pixels; the renderer then pins the camera point to the canvas centre
+  // shifted down by the vertical bias, which inverts to world coordinates 1:1.
   const hitTestPlayer = (
-    screenX: number,
-    screenY: number,
+    clientX: number,
+    clientY: number,
   ): { player: PlayerState; isSelf: boolean } | null => {
     if (!canvasRef) return null;
-    const worldX = (screenX - canvasRef.width / 2) / WORLD_ZOOM + cameraX;
+    const rect = canvasRef.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const screenX = (clientX - rect.left) * (canvasRef.width / rect.width);
+    const screenY = (clientY - rect.top) * (canvasRef.height / rect.height);
+    const worldX = screenX - canvasRef.width / 2 + cameraX;
     const worldY =
-      (screenY - canvasRef.height / 2 - WORLD_VERTICAL_BIAS) / WORLD_ZOOM +
-      cameraY;
+      screenY - canvasRef.height / 2 - WORLD_VERTICAL_BIAS + cameraY;
 
     let best: { player: PlayerState; isSelf: boolean } | null = null;
     let bestDist = Infinity;
@@ -973,8 +980,7 @@ export default function MayasHousePage() {
     // be separate DOM nodes.
     const handleCanvasDblClick = (e: MouseEvent) => {
       if (!canvasRef) return;
-      const rect = canvasRef.getBoundingClientRect();
-      const hit = hitTestPlayer(e.clientX - rect.left, e.clientY - rect.top);
+      const hit = hitTestPlayer(e.clientX, e.clientY);
       if (hit) openPlayerCard(hit);
     };
     canvasRef?.addEventListener('dblclick', handleCanvasDblClick);
@@ -1054,14 +1060,15 @@ export default function MayasHousePage() {
         });
       }
 
-      // Render Canvas
+      // Render Canvas. The backing store is the viewport divided by VIEW_ZOOM and CSS
+      // magnifies it back up (with pixelated filtering), so the world is always drawn
+      // at 1:1 and the browser does the scaling on whole source pixels.
       if (canvasRef) {
-        if (
-          canvasRef.width !== window.innerWidth ||
-          canvasRef.height !== window.innerHeight
-        ) {
-          canvasRef.width = window.innerWidth;
-          canvasRef.height = window.innerHeight;
+        const renderWidth = Math.max(1, Math.round(window.innerWidth / VIEW_ZOOM));
+        const renderHeight = Math.max(1, Math.round(window.innerHeight / VIEW_ZOOM));
+        if (canvasRef.width !== renderWidth || canvasRef.height !== renderHeight) {
+          canvasRef.width = renderWidth;
+          canvasRef.height = renderHeight;
         }
         const ctx = canvasRef.getContext('2d');
         if (ctx) {
@@ -1229,11 +1236,8 @@ export default function MayasHousePage() {
         class="ms-canvas"
         onClick={(e) => {
           // A click on a character is a selection, not a Maya nudge.
-          if (canvasRef) {
-            const rect = canvasRef.getBoundingClientRect();
-            if (hitTestPlayer(e.clientX - rect.left, e.clientY - rect.top)) {
-              return;
-            }
+          if (hitTestPlayer(e.clientX, e.clientY)) {
+            return;
           }
           // Clicking NPC Maya area triggers a fresh dialogue line
           const line =

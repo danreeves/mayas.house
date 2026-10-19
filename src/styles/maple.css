@@ -28,6 +28,10 @@ body {
   width: 100%;
   height: 100%;
   cursor: pointer;
+  /* The backing store is the viewport divided by VIEW_ZOOM; the browser does the
+     magnifying, and nearest-neighbour keeps the pixel art crisp. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .ms-pixelated {
